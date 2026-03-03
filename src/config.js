@@ -250,6 +250,9 @@ function load() {
     for (let i = 1; i <= 50; i++) {
       const url = getEnv(`UPSTREAM_${i}_URL`, '').replace(/\/$/, '');
       const key = getEnv(`UPSTREAM_${i}_KEY`, '');
+      // 支持显式配置签名：UPSTREAM_X_SIGN=true/false
+      // 默认：启用签名（更安全，iFlow API 需要）
+      const explicitSign = getEnv(`UPSTREAM_${i}_SIGN`, '');
       if (!url && !key) break;
       if (!url) throw new Error(`UPSTREAM_${i}_URL must be set`);
 
@@ -263,7 +266,8 @@ function load() {
       }
 
       if (!finalKey) throw new Error(`UPSTREAM_${i}_KEY must be set`);
-      const sign = url.includes('iflow') ? enableSignature : false;
+      // 签名逻辑：显式配置优先，否则默认启用
+      const sign = explicitSign !== '' ? getBool(`UPSTREAM_${i}_SIGN`, true) : true;
       numbered.push({ key: finalKey, url, sign, isIFlow: url.includes('iflow') });
     }
     if (numbered.length > 0) return numbered;
@@ -277,8 +281,8 @@ function load() {
         const key = entry.slice(0, sep).trim();
         const url = entry.slice(sep + 1).trim().replace(/\/$/, '');
         if (!key || !url) throw new Error(`UPSTREAMS entry invalid: ${entry}`);
-        const sign = url.includes('iflow') ? enableSignature : false;
-        return { key, url, sign };
+        // 默认启用签名
+        return { key, url, sign: true };
       });
     }
 
