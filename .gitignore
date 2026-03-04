@@ -2,3 +2,5 @@
 iflow-relay
 *.log
 .DS_Store
+.env.bak
+.sea-config.json
