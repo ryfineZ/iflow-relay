@@ -184,7 +184,7 @@ function validateApiKey(key) {
 
 // ─── 测试 Provider ────────────────────────────────────────────────────────────
 
-async function testProvider(url, key) {
+async function testProvider(url, key, fullModels = false) {
   const startTime = Date.now();
 
   try {
@@ -202,11 +202,13 @@ async function testProvider(url, key) {
     if (response.statusCode === 200) {
       let modelCount = 0;
       let models = [];
+      let allModels = [];
       try {
         const json = JSON.parse(response.data);
         if (json.data && Array.isArray(json.data)) {
           modelCount = json.data.length;
-          models = json.data.slice(0, 5).map(m => m.id);
+          allModels = json.data.map(m => m.id);
+          models = fullModels ? allModels : allModels.slice(0, 5);
         }
       } catch (_) {}
       return {
@@ -214,6 +216,7 @@ async function testProvider(url, key) {
         latency,
         modelCount,
         models,
+        allModels,
         statusCode: response.statusCode,
       };
     } else {
@@ -357,7 +360,7 @@ async function cmdModels() {
 
   if (config.upstreams.length === 0) {
     console.log('❌ 没有配置任何 Provider');
-    console.log('运行 `node cli.js provider add` 添加 Provider');
+    console.log('运行 `iflow-relay provider add` 添加 Provider');
     return;
   }
 
@@ -367,11 +370,14 @@ async function cmdModels() {
     console.log(`[${upstream.name}] ${upstream.url}`);
 
     try {
-      const result = await testProvider(upstream.url, upstream.key);
+      const result = await testProvider(upstream.url, upstream.key, true);
       if (result.success) {
-        console.log(`  ✅ 连接成功 (${result.latency}ms, ${result.modelCount} 个模型)`);
-        if (result.models.length > 0) {
-          console.log(`  模型示例: ${result.models.join(', ')}${result.modelCount > 5 ? '...' : ''}`);
+        console.log(`  ✅ 连接成功 (${result.latency}ms, ${result.modelCount} 个模型)\n`);
+        if (result.allModels.length > 0) {
+          result.allModels.forEach((model, i) => {
+            console.log(`    ${i + 1}. ${model}`);
+            console.log(`       别名: ${upstream.name}/${model} 或 ${model}@${upstream.name}`);
+          });
         }
       } else {
         console.log(`  ❌ 连接失败: ${result.error}`);
