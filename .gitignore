@@ -4,3 +4,5 @@ iflow-relay
 .DS_Store
 .env.bak
 .sea-config.json
+node_modules/
+package-lock.json
