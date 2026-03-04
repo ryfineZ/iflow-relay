@@ -504,6 +504,9 @@ function printHelp() {
 iflow-relay CLI - Manage iflow-relay proxy
 
 Usage:
+  node cli.js <command> [args]
+
+  # 或全局安装后:
   iflow-relay <command> [args]
 
 Commands:
@@ -517,14 +520,18 @@ Commands:
   health                    Check service health status
 
 Examples:
-  iflow-relay models
-  iflow-relay model set qwen3-max
-  iflow-relay provider list
-  iflow-relay provider add https://apis.iflow.cn/v1 sk-xxx --sign
-  iflow-relay provider add https://api.openai.com/v1 sk-yyy
-  iflow-relay provider remove 2
-  iflow-relay provider test 1
-  iflow-relay health
+  node cli.js models
+  node cli.js model set qwen3-max
+  node cli.js provider list
+  node cli.js provider add https://apis.iflow.cn/v1 sk-xxx --sign
+  node cli.js provider add https://api.openai.com/v1 sk-yyy
+  node cli.js provider remove 2
+  node cli.js provider test 1
+  node cli.js health
+
+Global Install:
+  npm link                  # 安装全局命令
+  iflow-relay models        # 然后可以直接使用
 
 Environment Variables:
   PORT                Server port (default: 8327)
