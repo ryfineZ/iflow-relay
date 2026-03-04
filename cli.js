@@ -249,8 +249,14 @@ async function testProvider(url, key, fullModels = false) {
     result.latency = Date.now() - startTime;
     result.statusCode = testResponse.statusCode;
 
-    // 400 (模型不存在) 或 401 (认证成功但模型错误) 都说明连接成功
-    if (testResponse.statusCode === 400 || testResponse.statusCode === 401) {
+    // 401 认证失败
+    if (testResponse.statusCode === 401) {
+      result.error = '认证失败，请检查 API Key 是否正确';
+      return result;
+    }
+
+    // 400 (模型不存在等) 说明连接成功、认证通过
+    if (testResponse.statusCode === 400) {
       result.success = true;
       result.warning = '模型列表端点不可用，但服务连接正常。请手动配置模型名称。';
 
