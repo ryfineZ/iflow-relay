@@ -1,100 +1,218 @@
 # iflow-relay
 
-`iflow-relay` 是一个极简 iFlow 专用反代。
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-设计原则：
-- 只做 iFlow 反代，不做多 provider、不做协议大而全转换
-- 不依赖 CLIProxyAPI 仓库（无 `replace`，无 CPA 包引用）
-- 保留 iFlow 稳定性关键逻辑（406 回退、449 映射、流式兜底）
+`iflow-relay` 是一个轻量级的 iFlow API 反向代理，提供 OpenAI 兼容接口。
 
-## 支持的接口
+## 特性
 
-- `GET /health`
-- `GET /v1/models`
-- `GET /v1/models/{id}`
-- `POST /v1/messages`
-- `POST /v1/messages/count_tokens`
-- `POST /v1/chat/completions`
+- **协议兼容**：支持 OpenAI Chat Completions 和 Anthropic Messages API
+- **请求伪装**：模拟官方 iFlow CLI 的请求特征
+- **TLS 指纹对齐**：使用 Node.js 实现，与官方 iFlow CLI（Node.js 编写）TLS 指纹完全一致
+- **多上游支持**：支持多个上游 API，自动选择最快的
+- **签名认证**：支持 iFlow API 签名机制
+- **流式响应**：完整支持 SSE 流式输出
 
-兼容别名：
-- `GET /models`
-- `GET /models/{id}`
-- `POST /messages`
-- `POST /messages/count_tokens`
-- `POST /chat/completions`
+## 为什么使用 Node.js？
 
-## 核心行为
+**核心原因：TLS 指纹对齐**
 
-- iFlow 请求头对齐：
-  - `Content-Type: application/json`
-  - `Authorization: Bearer ...`
-  - `user-agent: iFlow-Cli`
-  - `session-id`
-  - `conversation-id`
-  - `x-iflow-signature` + `x-iflow-timestamp`（可开关）
-- 显式删除 `Accept`
-- 406 回退：首发带签名，命中 `406` 后自动无签名重试一次
-- 业务状态映射：`status=449` -> `429`
-- 流式稳定性：
-  - 上游非 SSE 时自动合成 SSE chunk
-  - 流式期间可发送心跳注释 `: heartbeat`
-  - 识别 `network_error` 且无有效内容时返回错误
-- Anthropic 协议兼容：
-  - `messages -> chat.completions` 请求转换（文本/图片/工具调用）
-  - `chat.completions -> messages` 响应转换（非流式 + SSE 事件流）
-  - `count_tokens` 近似估算实现（用于 Claude Code 兼容）
+官方 iFlow CLI 使用 Node.js 编写，选择 Node.js 实现 iflow-relay 可以确保：
 
-## 依赖
+| 特征 | Node.js (iflow-relay) | 其他语言 (Rust/Go) |
+|------|----------------------|-------------------|
+| TLS 指纹 | ✅ 与官方 CLI 一致 | ❌ 指纹不同，易被检测 |
+| HTTP/1.1 行为 | ✅ 完全一致 | ⚠️ 可能有细微差异 |
+| 连接复用 | ✅ Keep-Alive 行为一致 | ⚠️ 实现可能不同 |
 
-仅依赖：
-- `github.com/google/uuid`
-- `github.com/tidwall/gjson`
-- `github.com/tidwall/sjson`
+```
+官方 iFlow CLI 请求 → Node.js HTTP Client → TLS 指纹 A
+iflow-relay 请求    → Node.js HTTP Client → TLS 指纹 A (相同)
+其他语言实现       → Rust/Go HTTP Client  → TLS 指纹 B (不同!)
+```
+
+服务端可以通过 TLS 指纹识别客户端类型，使用相同运行时可避免被检测。
+
+## 架构
+
+```
+┌─────────────┐     ┌───────────────┐     ┌────────────┐
+│   Client    │────▶│  iflow-relay  │────▶│  iFlow API │
+│ (OpenClaw)  │     │   (代理层)     │     │ (主上游)   │
+└─────────────┘     └───────────────┘     └────────────┘
+                           │
+                           ▼
+                    ┌────────────┐
+                    │  其他上游  │
+                    │ (备用/视觉) │
+                    └────────────┘
+```
+
+详细架构和对抗检测措施请查看 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 快速开始
 
-```bash
-cd /Users/zhangyufan/Workspace/Projects/iflow-relay
-cp .env.example .env
-set -a; source .env; set +a
+### 安装
 
-go run ./cmd/iflow-relay
+```bash
+git clone https://github.com/ryfineZ/iflow-relay.git
+cd iflow-relay
+npm install
+```
+
+### 配置
+
+```bash
+cp .env.example .env
+# 编辑 .env 填入 API Key
+```
+
+### 运行
+
+```bash
+npm start
 ```
 
 默认监听：`http://127.0.0.1:8327`
 
-健康检查：
+### 健康检查
 
 ```bash
-curl -s http://127.0.0.1:8327/health
+curl http://localhost:8327/health
+# {"status":"ok"}
 ```
+
+## 支持的接口
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/health` | GET | 健康检查 |
+| `/v1/models` | GET | 模型列表 |
+| `/v1/models/{id}` | GET | 模型详情 |
+| `/v1/chat/completions` | POST | OpenAI Chat Completions |
+| `/v1/messages` | POST | Anthropic Messages |
+| `/v1/messages/count_tokens` | POST | Token 估算 |
 
 ## 环境变量
 
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `PORT` | `8327` | 服务端口 |
-| `IFLOW_BASE_URL` | `https://apis.iflow.cn/v1` | iFlow 基础地址 |
-| `IFLOW_API_KEY` | - | 单 key |
-| `IFLOW_API_KEYS` | - | 多 key（逗号分隔，优先于 `IFLOW_API_KEY`） |
-| `DEFAULT_MODEL` | - | 请求未指定 model 时使用 |
-| `IFLOW_MODELS` | - | 对外暴露的模型列表（逗号分隔），默认取 `DEFAULT_MODEL` 或 `glm-5` |
-| `IFLOW_ENABLE_SIGNATURE` | `true` | 是否带签名头 |
-| `IFLOW_RETRY_406_UNSIGNED` | `true` | 406 后是否无签名重试 |
-| `PROXY_REQUEST_TIMEOUT_MS` | `180000` | 非流式请求超时 |
-| `PROXY_STREAM_HEARTBEAT_MS` | `15000` | 流式心跳间隔 |
-| `STREAM_EMIT_HEARTBEAT_COMMENTS` | `true` | 是否发送心跳注释 |
-| `PROXY_MAX_BODY_BYTES` | `26214400` | 请求体上限 |
-| `LOG_REQUEST_HEADERS` | `false` | 记录上游请求头 |
-| `LOG_RESPONSE_HEADERS` | `false` | 记录上游响应头 |
+### 基础配置
 
-## 验证
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PORT` | `8327` | 服务端口 |
+| `DEFAULT_MODEL` | `glm-5` | 默认模型 |
+| `IFLOW_MODELS` | `glm-5` | 模型列表 |
+
+### 多上游配置
 
 ```bash
-go test ./...
+# 主上游 - iFlow 官方 API（需要签名）
+UPSTREAM_1_URL=https://apis.iflow.cn/v1
+UPSTREAM_1_KEY=sk-xxx
+UPSTREAM_1_SIGN=true
+
+# 备用上游 - 任意 OpenAI 兼容 API（不需要签名）
+UPSTREAM_2_URL=https://api.example.com/v1
+UPSTREAM_2_KEY=sk-yyy
+UPSTREAM_2_SIGN=false
+
+# 调度策略：fastest（自动选最快）或 roundrobin（轮询）
+UPSTREAM_STRATEGY=fastest
 ```
 
-测试覆盖：
-- 请求头注入
-- 449 -> 429 映射
-- 406 无签名重试
+### 视觉模型桥接
+
+iflow-relay 支持**双模型编排**，让不支持视觉的上游也能处理图片：
+
+```
+┌─────────────┐     ┌───────────────┐     ┌─────────────────┐
+│   图片请求  │────▶│  iflow-relay  │────▶│  视觉模型(Qwen) │
+│             │     │  (自动桥接)    │     │  提取图片内容   │
+└─────────────┘     └───────────────┘     └─────────────────┘
+                           │
+                           ▼ 视觉模型返回文本描述
+                    ┌───────────────┐
+                    │  主上游模型   │
+                    │  (非视觉模型) │
+                    └───────────────┘
+```
+
+**工作原理**：
+1. 检测请求中是否包含图片
+2. 如有图片，先用视觉模型（如 Qwen3-VL-Plus）提取内容
+3. 将图片描述注入请求，转发给主上游模型
+4. 支持任意非视觉模型获得视觉理解能力
+
+**配置示例**：
+
+```bash
+# 启用多模态桥接
+MM_ENABLED=true
+MM_EXTRACTOR_MODEL=qwen3-vl-plus    # 视觉提取模型
+MM_MAX_IMAGES=4                      # 单次最多处理图片数
+MM_TIMEOUT_MS=12000                  # 视觉提取超时
+```
+
+### 其他配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PROXY_REQUEST_TIMEOUT_MS` | `180000` | 请求超时 |
+| `PROXY_STREAM_HEARTBEAT_MS` | `15000` | 流式心跳间隔 |
+| `LOG_REQUEST_HEADERS` | `false` | 记录请求头 |
+| `SENSITIVE_WORDS` | 见说明 | 敏感词列表（留空禁用） |
+
+## 对抗检测
+
+iflow-relay 实现了多种措施来模拟官方 CLI 行为：
+
+| 措施 | 说明 |
+|------|------|
+| 请求头对齐 | 与官方 CLI 完全一致的请求头 |
+| TLS 指纹 | HTTP/1.1 + Keep-Alive，禁用 HTTP/2 |
+| 签名机制 | HMAC-SHA256 签名认证 |
+| 会话标识 | Session-ID + Conversation-ID |
+| 限流保护 | 遇 429/403 自动暂停 |
+
+⚠️ **注意**：敏感词混淆功能已禁用，因为零宽字符可能触发服务端检测。
+
+详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+## 与 OpenClaw 集成
+
+```json
+// ~/.openclaw/openclaw.json
+{
+  "models": {
+    "providers": {
+      "iflow": {
+        "baseUrl": "http://localhost:8327",
+        "apiKey": "dummy",
+        "api": "openai-completions",
+        "models": [{"id": "glm-5"}]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "iflow/glm-5"
+      }
+    }
+  }
+}
+```
+
+## 已知问题
+
+### 账号封禁风险
+
+使用反向代理可能触发服务端的检测机制，导致账号被封禁。建议：
+
+- 使用官方 API 作为主要方案
+- 避免高频、长时间使用
+- 不要在同一账号下混用多种客户端
+
+## 许可证
+
+MIT License
