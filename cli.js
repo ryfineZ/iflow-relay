@@ -6,7 +6,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const crypto = require('crypto');
+const readline = require('readline');
 
 // ─── 配置加载 ────────────────────────────────────────────────────────────────
 
@@ -29,11 +29,11 @@ function loadConfig() {
   for (let i = 1; i <= 50; i++) {
     const url = getEnv(`UPSTREAM_${i}_URL`, '').replace(/\/$/, '');
     const key = getEnv(`UPSTREAM_${i}_KEY`, '');
-    const sign = getEnv(`UPSTREAM_${i}_SIGN`, 'true').toLowerCase() !== 'false';
     if (!url && !key) break;
-    if (!url) continue;
-    if (!key) continue;
-    upstreams.push({ url, key, sign });
+    if (!url || !key) continue;
+    // 根据URL判断是否需要签名
+    const sign = url.includes('iflow') || url.includes('apis.iflow');
+    upstreams.push({ url, key, sign, name: url.includes('iflow') ? 'iFlow' : `provider-${i}` });
   }
 
   // 从 ~/.iflow/settings.json 加载
@@ -50,7 +50,7 @@ function loadConfig() {
 
   // 如果没有配置上游，使用 iFlow CLI 凭证
   if (upstreams.length === 0 && iflowKey) {
-    upstreams.push({ url: iflowUrl, key: iflowKey, sign: true });
+    upstreams.push({ url: iflowUrl, key: iflowKey, sign: true, name: 'iFlow' });
   }
 
   return {
@@ -89,7 +89,7 @@ function httpRequest(url, options = {}) {
     req.on('error', reject);
     req.setTimeout(options.timeout || 10000, () => {
       req.destroy();
-      reject(new Error('Request timeout'));
+      reject(new Error('请求超时'));
     });
 
     if (options.body) {
@@ -99,264 +99,143 @@ function httpRequest(url, options = {}) {
   });
 }
 
-// ─── 命令实现 ──────────────────────────────────────────────────────────────────
+// ─── 交互式输入 ──────────────────────────────────────────────────────────────
 
-async function cmdModels(args) {
-  const config = loadConfig();
+function createReadline() {
+  return readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+}
 
-  if (config.upstreams.length === 0) {
-    console.error('Error: No upstreams configured.');
-    console.error('Set UPSTREAM_1_URL and UPSTREAM_1_KEY in .env or run iflow login');
-    process.exit(1);
+function question(rl, prompt, defaultValue = '') {
+  return new Promise((resolve) => {
+    const displayPrompt = defaultValue ? `${prompt} [${defaultValue}]: ` : `${prompt}: `;
+    rl.question(displayPrompt, (answer) => {
+      resolve(answer.trim() || defaultValue);
+    });
+  });
+}
+
+function questionYesNo(rl, prompt, defaultValue = 'n') {
+  return new Promise((resolve) => {
+    const hint = defaultValue === 'y' ? '[Y/n]' : '[y/N]';
+    rl.question(`${prompt} ${hint}: `, (answer) => {
+      const a = answer.trim().toLowerCase();
+      if (a === 'y' || a === 'yes') resolve(true);
+      else if (a === 'n' || a === 'no') resolve(false);
+      else resolve(defaultValue === 'y');
+    });
+  });
+}
+
+function questionChoice(rl, prompt, choices) {
+  return new Promise((resolve) => {
+    console.log(prompt);
+    choices.forEach((c, i) => console.log(`  ${i + 1}. ${c}`));
+    rl.question('请选择: ', (answer) => {
+      const num = parseInt(answer.trim(), 10);
+      if (num >= 1 && num <= choices.length) {
+        resolve(num - 1);
+      } else {
+        resolve(-1);
+      }
+    });
+  });
+}
+
+// ─── 验证函数 ────────────────────────────────────────────────────────────────
+
+function validateUrl(url) {
+  if (!url) return { valid: false, error: 'URL 不能为空' };
+
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { valid: false, error: 'URL 必须以 http:// 或 https:// 开头' };
+    }
+    if (!parsed.hostname) {
+      return { valid: false, error: 'URL 格式无效' };
+    }
+    return { valid: true };
+  } catch (e) {
+    return { valid: false, error: 'URL 格式无效: ' + e.message };
   }
+}
 
-  console.log('Fetching models from upstreams...\n');
+function validateApiKey(key) {
+  if (!key) return { valid: false, error: 'API Key 不能为空' };
+  if (key.length < 10) return { valid: false, error: 'API Key 长度不足' };
+  return { valid: true };
+}
 
-  const allModels = [];
-  const errors = [];
+// ─── 测试 Provider ────────────────────────────────────────────────────────────
 
-  for (let i = 0; i < config.upstreams.length; i++) {
-    const upstream = config.upstreams[i];
-    const upstreamName = upstream.url.includes('iflow') ? 'iFlow' : `upstream-${i + 1}`;
+async function testProvider(url, key) {
+  const startTime = Date.now();
 
-    try {
-      const response = await httpRequest(`${upstream.url}/models`, {
-        headers: {
-          'authorization': `Bearer ${upstream.key}`,
-          'user-agent': 'iFlow-Cli',
-          'accept': '*/*',
-        },
-        timeout: 15000,
-      });
+  try {
+    const response = await httpRequest(`${url}/models`, {
+      headers: {
+        'authorization': `Bearer ${key}`,
+        'user-agent': 'iFlow-Cli',
+        'accept': '*/*',
+      },
+      timeout: 15000,
+    });
 
-      if (response.statusCode === 200) {
+    const latency = Date.now() - startTime;
+
+    if (response.statusCode === 200) {
+      let modelCount = 0;
+      let models = [];
+      try {
         const json = JSON.parse(response.data);
         if (json.data && Array.isArray(json.data)) {
-          json.data.forEach(m => {
-            allModels.push({
-              id: m.id,
-              owned_by: m.owned_by || 'unknown',
-              upstream: upstreamName,
-              upstream_url: upstream.url,
-            });
-          });
+          modelCount = json.data.length;
+          models = json.data.slice(0, 5).map(m => m.id);
         }
-      } else {
-        errors.push({ upstream: upstreamName, status: response.statusCode });
-      }
-    } catch (err) {
-      errors.push({ upstream: upstreamName, error: err.message });
-    }
-  }
-
-  // 去重
-  const seen = new Set();
-  const uniqueModels = allModels.filter(m => {
-    if (seen.has(m.id)) return false;
-    seen.add(m.id);
-    return true;
-  });
-
-  // 显示模型列表
-  if (uniqueModels.length === 0) {
-    console.log('No models found.');
-    if (errors.length > 0) {
-      console.log('\nErrors:');
-      errors.forEach(e => console.log(`  - ${e.upstream}: ${e.error || e.status}`));
-    }
-    return;
-  }
-
-  // 按上游分组显示
-  const byUpstream = {};
-  uniqueModels.forEach(m => {
-    if (!byUpstream[m.upstream]) byUpstream[m.upstream] = [];
-    byUpstream[m.upstream].push(m);
-  });
-
-  console.log(`Found ${uniqueModels.length} models:\n`);
-
-  Object.entries(byUpstream).forEach(([upstream, models]) => {
-    console.log(`[${upstream}] (${models.length} models)`);
-    models.forEach(m => {
-      const current = m.id === config.defaultModel ? ' (current)' : '';
-      console.log(`  - ${m.id}${current}`);
-    });
-    console.log('');
-  });
-
-  if (errors.length > 0) {
-    console.log('Errors:');
-    errors.forEach(e => console.log(`  - ${e.upstream}: ${e.error || e.status}`));
-  }
-}
-
-async function cmdModelShow(args) {
-  const config = loadConfig();
-
-  console.log('Current configuration:\n');
-  console.log(`  Default model: ${config.defaultModel}`);
-  console.log(`  Configured models: ${config.models.length > 0 ? config.models.join(', ') : '(none)'}`);
-  console.log(`  Upstreams: ${config.upstreams.length}`);
-
-  if (config.upstreams.length > 0) {
-    console.log('\n  Upstream details:');
-    config.upstreams.forEach((u, i) => {
-      const name = u.url.includes('iflow') ? 'iFlow' : `upstream-${i + 1}`;
-      console.log(`    [${i + 1}] ${name}`);
-      console.log(`        URL: ${u.url}`);
-      console.log(`        Key: ${u.key.substring(0, 10)}...`);
-    });
-  }
-}
-
-async function cmdModelSet(args) {
-  const modelId = args[0];
-
-  if (!modelId) {
-    console.error('Error: Model ID required.');
-    console.error('Usage: iflow-relay model set <model-id>');
-    process.exit(1);
-  }
-
-  const envPath = path.join(process.cwd(), '.env');
-
-  // 读取现有 .env
-  let content = '';
-  if (fs.existsSync(envPath)) {
-    content = fs.readFileSync(envPath, 'utf-8');
-  }
-
-  const lines = content.split('\n');
-  let foundDefault = false;
-  let foundModels = false;
-  const newLines = lines.map(line => {
-    if (line.startsWith('DEFAULT_MODEL=')) {
-      foundDefault = true;
-      return `DEFAULT_MODEL=${modelId}`;
-    }
-    if (line.startsWith('IFLOW_MODELS=')) {
-      foundModels = true;
-      // 更新模型列表
-      return `IFLOW_MODELS=${modelId}`;
-    }
-    return line;
-  });
-
-  if (!foundDefault) {
-    newLines.push(`DEFAULT_MODEL=${modelId}`);
-  }
-  if (!foundModels) {
-    newLines.push(`IFLOW_MODELS=${modelId}`);
-  }
-
-  fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
-  console.log(`Default model set to: ${modelId}`);
-  console.log(`Updated: ${envPath}`);
-  console.log('\nRestart iflow-relay for changes to take effect.');
-}
-
-async function cmdHealth(args) {
-  const config = loadConfig();
-  const baseUrl = `http://localhost:${config.port}`;
-
-  try {
-    // 基础健康检查
-    const health = await httpRequest(`${baseUrl}/health`, { timeout: 5000 });
-    console.log('Health:', health.data);
-
-    // ACP 状态检查
-    try {
-      const acpHealth = await httpRequest(`${baseUrl}/health/acp`, { timeout: 5000 });
-      const acp = JSON.parse(acpHealth.data);
-      console.log('\nACP Status:');
-      console.log(`  Enabled: ${acp.acp.enabled}`);
-      console.log(`  Available: ${acp.acp.available}`);
-      console.log(`  Connected: ${acp.acp.connected}`);
-      console.log(`  Port: ${acp.acp.port}`);
-    } catch (e) {
-      console.log('\nACP Status: (service not running)');
+      } catch (_) {}
+      return {
+        success: true,
+        latency,
+        modelCount,
+        models,
+        statusCode: response.statusCode,
+      };
+    } else {
+      let errorMsg = response.data;
+      try {
+        const json = JSON.parse(response.data);
+        errorMsg = json.error?.message || json.message || response.data.substring(0, 200);
+      } catch (_) {}
+      return {
+        success: false,
+        latency,
+        statusCode: response.statusCode,
+        error: errorMsg,
+      };
     }
   } catch (err) {
-    console.error('Error: Cannot connect to iflow-relay');
-    console.error(`Make sure it's running on port ${config.port}`);
-    console.error(`  npm start`);
-    process.exit(1);
+    return {
+      success: false,
+      latency: Date.now() - startTime,
+      error: err.message,
+    };
   }
 }
 
-// ─── Provider 命令 ──────────────────────────────────────────────────────────────
+// ─── Provider 管理 ────────────────────────────────────────────────────────────
 
-async function cmdProviderList(args) {
-  const config = loadConfig();
-
-  if (config.upstreams.length === 0) {
-    console.log('No providers configured.');
-    console.log('\nTo add a provider:');
-    console.log('  iflow-relay provider add <url> <key> [--sign]');
-    return;
-  }
-
-  console.log(`Configured providers (${config.upstreams.length}):\n`);
-
-  config.upstreams.forEach((u, i) => {
-    const name = u.url.includes('iflow') ? 'iFlow' : `provider-${i + 1}`;
-    const sign = u.sign ? 'yes' : 'no';
-    console.log(`  [${i + 1}] ${name}`);
-    console.log(`      URL: ${u.url}`);
-    console.log(`      Key: ${u.key.substring(0, 10)}...${u.key.substring(u.key.length - 4)}`);
-    console.log(`      Sign: ${sign}`);
-    console.log('');
-  });
-}
-
-async function cmdProviderAdd(args) {
-  if (args.length < 2) {
-    console.error('Error: URL and API key required.');
-    console.error('Usage: iflow-relay provider add <url> <key> [--sign]');
-    console.error('');
-    console.error('Options:');
-    console.error('  --sign    Enable request signing (for iFlow API)');
-    console.error('');
-    console.error('Examples:');
-    console.error('  iflow-relay provider add https://apis.iflow.cn/v1 sk-xxx --sign');
-    console.error('  iflow-relay provider add https://api.openai.com/v1 sk-yyy');
-    process.exit(1);
-  }
-
-  let url = args[0];
-  const key = args[1];
-  const enableSign = args.includes('--sign');
-
-  // 移除末尾斜杠
-  url = url.replace(/\/$/, '');
-
-  // 验证 URL
-  try {
-    new URL(url);
-  } catch (e) {
-    console.error(`Error: Invalid URL: ${url}`);
-    process.exit(1);
-  }
-
-  // 验证 key
-  if (!key || key.length < 10) {
-    console.error('Error: API key seems too short');
-    process.exit(1);
-  }
-
+function getNextProviderNum() {
   const envPath = path.join(process.cwd(), '.env');
-
-  // 读取现有 .env
   let content = '';
   if (fs.existsSync(envPath)) {
     content = fs.readFileSync(envPath, 'utf-8');
   }
 
-  // 找到下一个可用的 provider 编号
-  const lines = content.split('\n');
   let maxNum = 0;
-  lines.forEach(line => {
+  content.split('\n').forEach(line => {
     const match = line.match(/^UPSTREAM_(\d+)_URL=/);
     if (match) {
       const num = parseInt(match[1], 10);
@@ -364,49 +243,37 @@ async function cmdProviderAdd(args) {
     }
   });
 
-  const nextNum = maxNum + 1;
-
-  // 添加新 provider
-  const newLines = [
-    '',
-    `# Provider ${nextNum} (added ${new Date().toISOString().split('T')[0]})`,
-    `UPSTREAM_${nextNum}_URL=${url}`,
-    `UPSTREAM_${nextNum}_KEY=${key}`,
-    `UPSTREAM_${nextNum}_SIGN=${enableSign}`,
-  ];
-
-  fs.writeFileSync(envPath, content + newLines.join('\n'), 'utf-8');
-
-  console.log(`Provider ${nextNum} added:`);
-  console.log(`  URL: ${url}`);
-  console.log(`  Key: ${key.substring(0, 10)}...${key.substring(key.length - 4)}`);
-  console.log(`  Sign: ${enableSign ? 'yes' : 'no'}`);
-  console.log(`\nUpdated: ${envPath}`);
-  console.log('Restart iflow-relay for changes to take effect.');
+  return maxNum + 1;
 }
 
-async function cmdProviderRemove(args) {
-  const num = parseInt(args[0], 10);
-
-  if (!num || num < 1) {
-    console.error('Error: Provider number required.');
-    console.error('Usage: iflow-relay provider remove <number>');
-    console.error('');
-    console.error('Use "iflow-relay provider list" to see provider numbers.');
-    process.exit(1);
-  }
-
+function addProviderToEnv(url, key, sign) {
   const envPath = path.join(process.cwd(), '.env');
-
-  if (!fs.existsSync(envPath)) {
-    console.error('Error: .env file not found');
-    process.exit(1);
+  let content = '';
+  if (fs.existsSync(envPath)) {
+    content = fs.readFileSync(envPath, 'utf-8');
   }
+
+  const num = getNextProviderNum();
+  const name = url.includes('iflow') ? 'iFlow' : `provider-${num}`;
+
+  const newContent = content +
+    (content && !content.endsWith('\n') ? '\n' : '') +
+    `\n# Provider ${num}: ${name} (added ${new Date().toISOString().split('T')[0]})\n` +
+    `UPSTREAM_${num}_URL=${url}\n` +
+    `UPSTREAM_${num}_KEY=${key}\n` +
+    `UPSTREAM_${num}_SIGN=${sign}\n`;
+
+  fs.writeFileSync(envPath, newContent, 'utf-8');
+  return { num, name };
+}
+
+function removeProviderFromEnv(num) {
+  const envPath = path.join(process.cwd(), '.env');
+  if (!fs.existsSync(envPath)) return false;
 
   const content = fs.readFileSync(envPath, 'utf-8');
   const lines = content.split('\n');
 
-  // 查找要删除的 provider
   const urlPattern = new RegExp(`^UPSTREAM_${num}_URL=`);
   const keyPattern = new RegExp(`^UPSTREAM_${num}_KEY=`);
   const signPattern = new RegExp(`^UPSTREAM_${num}_SIGN=`);
@@ -415,176 +282,508 @@ async function cmdProviderRemove(args) {
   const newLines = [];
   let skipComment = false;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // 跳过相关注释
+  for (const line of lines) {
     if (line.match(new RegExp(`^# Provider ${num} `))) {
       skipComment = true;
       found = true;
       continue;
     }
-
-    // 跳过相关配置行
     if (line.match(urlPattern) || line.match(keyPattern) || line.match(signPattern)) {
       found = true;
       continue;
     }
-
-    // 跳过空行（在注释后）
     if (skipComment && line.trim() === '') {
       skipComment = false;
       continue;
     }
-
     skipComment = false;
     newLines.push(line);
   }
 
-  if (!found) {
-    console.error(`Error: Provider ${num} not found.`);
-    console.error('Use "iflow-relay provider list" to see provider numbers.');
-    process.exit(1);
+  if (found) {
+    fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
   }
-
-  fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
-
-  console.log(`Provider ${num} removed.`);
-  console.log(`Updated: ${envPath}`);
-  console.log('Restart iflow-relay for changes to take effect.');
+  return found;
 }
 
-async function cmdProviderTest(args) {
-  const config = loadConfig();
-  const num = parseInt(args[0], 10);
+// ─── 命令实现 ──────────────────────────────────────────────────────────────────
 
-  if (!num || num < 1 || num > config.upstreams.length) {
-    console.error('Error: Invalid provider number.');
-    console.error('Use "iflow-relay provider list" to see provider numbers.');
-    process.exit(1);
+async function cmdModels() {
+  const config = loadConfig();
+
+  if (config.upstreams.length === 0) {
+    console.log('❌ 没有配置任何 Provider');
+    console.log('运行 `node cli.js provider add` 添加 Provider');
+    return;
   }
 
-  const upstream = config.upstreams[num - 1];
-  const name = upstream.url.includes('iflow') ? 'iFlow' : `provider-${num}`;
+  console.log('正在获取模型列表...\n');
 
-  console.log(`Testing provider ${num} (${name})...`);
-  console.log(`URL: ${upstream.url}`);
+  for (const upstream of config.upstreams) {
+    console.log(`[${upstream.name}] ${upstream.url}`);
+
+    try {
+      const result = await testProvider(upstream.url, upstream.key);
+      if (result.success) {
+        console.log(`  ✅ 连接成功 (${result.latency}ms, ${result.modelCount} 个模型)`);
+        if (result.models.length > 0) {
+          console.log(`  模型示例: ${result.models.join(', ')}${result.modelCount > 5 ? '...' : ''}`);
+        }
+      } else {
+        console.log(`  ❌ 连接失败: ${result.error}`);
+      }
+    } catch (err) {
+      console.log(`  ❌ 连接失败: ${err.message}`);
+    }
+    console.log('');
+  }
+}
+
+async function cmdProviderList() {
+  const config = loadConfig();
+
+  if (config.upstreams.length === 0) {
+    console.log('❌ 没有配置任何 Provider');
+    console.log('运行 `node cli.js provider add` 添加 Provider');
+    return;
+  }
+
+  console.log(`已配置 ${config.upstreams.length} 个 Provider:\n`);
+
+  for (let i = 0; i < config.upstreams.length; i++) {
+    const u = config.upstreams[i];
+    console.log(`[${i + 1}] ${u.name}`);
+    console.log(`    URL: ${u.url}`);
+    console.log(`    Key: ${u.key.substring(0, 10)}...${u.key.substring(u.key.length - 4)}`);
+    console.log(`    Sign: ${u.sign ? '是 (iFlow)' : '否'}`);
+    console.log('');
+  }
+}
+
+async function cmdProviderAdd() {
+  const rl = createReadline();
 
   try {
-    const startTime = Date.now();
-    const response = await httpRequest(`${upstream.url}/models`, {
-      headers: {
-        'authorization': `Bearer ${upstream.key}`,
-        'user-agent': 'iFlow-Cli',
-        'accept': '*/*',
-      },
-      timeout: 15000,
-    });
-    const latency = Date.now() - startTime;
+    console.log('╔══════════════════════════════════════════════╗');
+    console.log('║           添加新的 Provider                  ║');
+    console.log('╚══════════════════════════════════════════════╝\n');
 
-    if (response.statusCode === 200) {
-      const json = JSON.parse(response.data);
-      const modelCount = json.data ? json.data.length : 0;
-      console.log(`\n✅ Provider ${num} is working`);
-      console.log(`   Latency: ${latency}ms`);
-      console.log(`   Models: ${modelCount}`);
-    } else {
-      console.log(`\n❌ Provider ${num} returned status ${response.statusCode}`);
-      console.log(`   Response: ${response.data.substring(0, 200)}`);
+    // 1. 输入 URL
+    let url = '';
+    while (true) {
+      url = await question(rl, '请输入 API URL');
+      const validation = validateUrl(url);
+      if (validation.valid) {
+        url = url.replace(/\/$/, ''); // 移除末尾斜杠
+        break;
+      }
+      console.log(`❌ ${validation.error}\n`);
     }
-  } catch (err) {
-    console.log(`\n❌ Provider ${num} failed: ${err.message}`);
+
+    // 判断是否是 iFlow
+    const isIFlow = url.includes('iflow') || url.includes('apis.iflow');
+    if (isIFlow) {
+      console.log('✓ 检测到 iFlow API，将自动启用签名\n');
+    }
+
+    // 2. 输入 API Key
+    let key = '';
+    while (true) {
+      key = await question(rl, '请输入 API Key');
+      const validation = validateApiKey(key);
+      if (validation.valid) break;
+      console.log(`❌ ${validation.error}\n`);
+    }
+
+    // 3. 测试连接
+    console.log('\n正在测试连接...');
+    const result = await testProvider(url, key);
+
+    if (result.success) {
+      console.log(`\n✅ 连接成功!`);
+      console.log(`   延迟: ${result.latency}ms`);
+      console.log(`   模型数量: ${result.modelCount}`);
+      if (result.models.length > 0) {
+        console.log(`   模型示例: ${result.models.join(', ')}`);
+      }
+
+      // 询问是否保存
+      const save = await questionYesNo(rl, '\n是否保存此 Provider?', 'y');
+      if (save) {
+        const { num, name } = addProviderToEnv(url, key, isIFlow);
+        console.log(`\n✅ Provider ${num} (${name}) 已保存到 .env`);
+        console.log('重启 iflow-relay 使配置生效: npm start');
+      } else {
+        console.log('\n已取消保存');
+      }
+    } else {
+      // 连接失败
+      console.log(`\n❌ 连接失败`);
+      console.log(`   状态码: ${result.statusCode || 'N/A'}`);
+      console.log(`   错误: ${result.error}`);
+
+      // 询问用户如何处理
+      while (true) {
+        console.log('\n请选择:');
+        console.log('  1. 重新输入');
+        console.log('  2. 仍然保存 (不推荐)');
+        console.log('  3. 放弃');
+        const choice = await question(rl, '请选择 (1-3)');
+
+        if (choice === '1') {
+          // 重新输入 - 递归调用
+          rl.close();
+          await cmdProviderAdd();
+          return;
+        } else if (choice === '2') {
+          const { num, name } = addProviderToEnv(url, key, isIFlow);
+          console.log(`\n✅ Provider ${num} (${name}) 已保存到 .env (未验证)`);
+          console.log('重启 iflow-relay 使配置生效: npm start');
+          break;
+        } else if (choice === '3') {
+          console.log('\n已取消');
+          break;
+        } else {
+          console.log('无效选择，请输入 1-3');
+        }
+      }
+    }
+  } finally {
+    rl.close();
   }
 }
 
-// ─── 帮助信息 ──────────────────────────────────────────────────────────────────
+async function cmdProviderRemove() {
+  const config = loadConfig();
+
+  if (config.upstreams.length === 0) {
+    console.log('❌ 没有配置任何 Provider');
+    return;
+  }
+
+  const rl = createReadline();
+
+  try {
+    console.log('已配置的 Provider:\n');
+    config.upstreams.forEach((u, i) => {
+      console.log(`  [${i + 1}] ${u.name} - ${u.url}`);
+    });
+    console.log('');
+
+    const numStr = await question(rl, '请输入要删除的 Provider 编号');
+    const num = parseInt(numStr, 10);
+
+    if (isNaN(num) || num < 1 || num > config.upstreams.length) {
+      console.log('❌ 无效的编号');
+      return;
+    }
+
+    const upstream = config.upstreams[num - 1];
+    const confirm = await questionYesNo(rl, `确认删除 Provider ${num} (${upstream.name})?`);
+
+    if (confirm) {
+      // 需要找到实际的 UPSTREAM_X 编号
+      const envPath = path.join(process.cwd(), '.env');
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf-8');
+        const lines = content.split('\n');
+
+        // 找到匹配的编号
+        for (let i = 1; i <= 50; i++) {
+          const urlLine = lines.find(l => l.startsWith(`UPSTREAM_${i}_URL=`));
+          if (urlLine) {
+            const envUrl = urlLine.split('=')[1].replace(/\/$/, '');
+            if (envUrl === upstream.url) {
+              removeProviderFromEnv(i);
+              console.log(`\n✅ Provider ${num} (${upstream.name}) 已删除`);
+              console.log('重启 iflow-relay 使配置生效: npm start');
+              return;
+            }
+          }
+        }
+      }
+      console.log('❌ 删除失败: 找不到对应的配置');
+    } else {
+      console.log('已取消');
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+async function cmdProviderTest() {
+  const config = loadConfig();
+
+  if (config.upstreams.length === 0) {
+    console.log('❌ 没有配置任何 Provider');
+    return;
+  }
+
+  const rl = createReadline();
+
+  try {
+    console.log('已配置的 Provider:\n');
+    config.upstreams.forEach((u, i) => {
+      console.log(`  [${i + 1}] ${u.name} - ${u.url}`);
+    });
+    console.log('');
+
+    const numStr = await question(rl, '请输入要测试的 Provider 编号 (直接回车测试全部)');
+    const num = parseInt(numStr, 10);
+
+    if (!isNaN(num) && num >= 1 && num <= config.upstreams.length) {
+      // 测试单个
+      const upstream = config.upstreams[num - 1];
+      console.log(`\n测试 Provider ${num} (${upstream.name})...`);
+      console.log(`URL: ${upstream.url}`);
+
+      const result = await testProvider(upstream.url, upstream.key);
+
+      if (result.success) {
+        console.log(`\n✅ 连接成功`);
+        console.log(`   延迟: ${result.latency}ms`);
+        console.log(`   模型数量: ${result.modelCount}`);
+        if (result.models.length > 0) {
+          console.log(`   模型示例: ${result.models.join(', ')}`);
+        }
+      } else {
+        console.log(`\n❌ 连接失败`);
+        console.log(`   状态码: ${result.statusCode || 'N/A'}`);
+        console.log(`   错误: ${result.error}`);
+      }
+    } else {
+      // 测试全部
+      console.log('\n测试所有 Provider...\n');
+
+      for (let i = 0; i < config.upstreams.length; i++) {
+        const u = config.upstreams[i];
+        console.log(`[${i + 1}] ${u.name}`);
+
+        const result = await testProvider(u.url, u.key);
+
+        if (result.success) {
+          console.log(`    ✅ 成功 (${result.latency}ms, ${result.modelCount} 个模型)`);
+        } else {
+          console.log(`    ❌ 失败: ${result.error}`);
+        }
+        console.log('');
+      }
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+async function cmdModel() {
+  const config = loadConfig();
+
+  console.log('当前配置:\n');
+  console.log(`  默认模型: ${config.defaultModel}`);
+  console.log(`  Provider 数量: ${config.upstreams.length}`);
+
+  if (config.upstreams.length === 0) {
+    console.log('\n❌ 没有配置任何 Provider');
+    console.log('运行 `node cli.js provider add` 添加 Provider');
+    return;
+  }
+
+  const rl = createReadline();
+
+  try {
+    console.log('\n正在获取可用模型...\n');
+
+    // 获取所有模型
+    const allModels = [];
+    for (const upstream of config.upstreams) {
+      try {
+        const result = await testProvider(upstream.url, upstream.key);
+        if (result.success && result.models) {
+          const resp = await httpRequest(`${upstream.url}/models`, {
+            headers: {
+              'authorization': `Bearer ${upstream.key}`,
+              'user-agent': 'iFlow-Cli',
+              'accept': '*/*',
+            },
+            timeout: 10000,
+          });
+          if (resp.statusCode === 200) {
+            const json = JSON.parse(resp.data);
+            if (json.data) {
+              json.data.forEach(m => {
+                if (!allModels.find(x => x.id === m.id)) {
+                  allModels.push({
+                    id: m.id,
+                    owned_by: m.owned_by || 'unknown',
+                    upstream: upstream.name,
+                  });
+                }
+              });
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (allModels.length === 0) {
+      console.log('❌ 无法获取模型列表');
+      return;
+    }
+
+    // 显示模型列表
+    console.log(`可用模型 (${allModels.length} 个):\n`);
+    const pageSize = 20;
+    let page = 0;
+
+    while (true) {
+      const start = page * pageSize;
+      const end = Math.min(start + pageSize, allModels.length);
+      const pageModels = allModels.slice(start, end);
+
+      pageModels.forEach((m, i) => {
+        const current = m.id === config.defaultModel ? ' ← 当前' : '';
+        console.log(`  ${start + i + 1}. ${m.id}${current}`);
+      });
+
+      console.log(`\n第 ${page + 1} / ${Math.ceil(allModels.length / pageSize)} 页`);
+
+      const action = await question(rl, '\n输入序号选择模型, n=下一页, p=上一页, q=退出');
+
+      if (action === 'q' || action === '') {
+        break;
+      } else if (action === 'n' && end < allModels.length) {
+        page++;
+        console.log('');
+      } else if (action === 'p' && page > 0) {
+        page--;
+        console.log('');
+      } else {
+        const num = parseInt(action, 10);
+        if (num >= 1 && num <= allModels.length) {
+          const model = allModels[num - 1];
+          const confirm = await questionYesNo(rl, `\n设置默认模型为 ${model.id}?`);
+
+          if (confirm) {
+            // 更新 .env
+            const envPath = path.join(process.cwd(), '.env');
+            let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+
+            const lines = content.split('\n');
+            let foundDefault = false;
+            let foundModels = false;
+            const newLines = lines.map(line => {
+              if (line.startsWith('DEFAULT_MODEL=')) {
+                foundDefault = true;
+                return `DEFAULT_MODEL=${model.id}`;
+              }
+              if (line.startsWith('IFLOW_MODELS=')) {
+                foundModels = true;
+                return `IFLOW_MODELS=${model.id}`;
+              }
+              return line;
+            });
+
+            if (!foundDefault) newLines.push(`DEFAULT_MODEL=${model.id}`);
+            if (!foundModels) newLines.push(`IFLOW_MODELS=${model.id}`);
+
+            fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
+
+            console.log(`\n✅ 默认模型已设置为: ${model.id}`);
+            console.log('重启 iflow-relay 使配置生效: npm start');
+            break;
+          }
+        }
+      }
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+async function cmdHealth() {
+  const config = loadConfig();
+  const baseUrl = `http://localhost:${config.port}`;
+
+  try {
+    const health = await httpRequest(`${baseUrl}/health`, { timeout: 5000 });
+    console.log('服务状态: ', JSON.parse(health.data));
+
+    try {
+      const acpHealth = await httpRequest(`${baseUrl}/health/acp`, { timeout: 5000 });
+      const acp = JSON.parse(acpHealth.data);
+      console.log('\nACP 状态:');
+      console.log(`  启用: ${acp.acp.enabled}`);
+      console.log(`  可用: ${acp.acp.available}`);
+      console.log(`  连接: ${acp.acp.connected}`);
+      console.log(`  端口: ${acp.acp.port}`);
+    } catch (_) {
+      console.log('\nACP 状态: 服务未运行');
+    }
+  } catch (_) {
+    console.log('❌ 无法连接到 iflow-relay');
+    console.log(`确保服务正在运行: npm start`);
+  }
+}
+
+// ─── 帮助信息 ────────────────────────────────────────────────────────────────
 
 function printHelp() {
   console.log(`
-iflow-relay CLI - Manage iflow-relay proxy
+iflow-relay CLI - 管理 iflow-relay 代理
 
-Usage:
+用法:
   node cli.js <command> [args]
 
-  # 或全局安装后:
-  iflow-relay <command> [args]
+命令:
+  models              列出所有可用模型
+  model               交互式选择默认模型
+  provider list       列出已配置的 Provider
+  provider add        交互式添加 Provider
+  provider remove     删除 Provider
+  provider test       测试 Provider 连接
+  health              检查服务状态
 
-Commands:
-  models                    List all available models from upstreams
-  model show                Show current model configuration
-  model set <id>            Set default model
-  provider list             List configured providers
-  provider add <url> <key> [--sign]   Add a new provider
-  provider remove <num>     Remove a provider
-  provider test <num>       Test provider connection
-  health                    Check service health status
-
-Examples:
+示例:
   node cli.js models
-  node cli.js model set qwen3-max
-  node cli.js provider list
-  node cli.js provider add https://apis.iflow.cn/v1 sk-xxx --sign
-  node cli.js provider add https://api.openai.com/v1 sk-yyy
-  node cli.js provider remove 2
-  node cli.js provider test 1
+  node cli.js model
+  node cli.js provider add
+  node cli.js provider test
   node cli.js health
 
-Global Install:
-  npm link                  # 安装全局命令
-  iflow-relay models        # 然后可以直接使用
-
-Environment Variables:
-  PORT                Server port (default: 8327)
-  UPSTREAM_1_URL      Upstream API URL
-  UPSTREAM_1_KEY      Upstream API key
-  UPSTREAM_1_SIGN     Enable signing (true/false)
-  DEFAULT_MODEL       Default model ID
-  ACP_ENABLED         Enable ACP mode (true/false)
-  ACP_PORT            ACP server port (default: 8090)
+全局安装:
+  npm link
+  iflow-relay models
 `);
 }
 
-// ─── 主入口 ────────────────────────────────────────────────────────────────────
+// ─── 主入口 ──────────────────────────────────────────────────────────────────
 
 async function main() {
   const args = process.argv.slice(2);
   const command = args[0] || 'help';
-  const subArgs = args.slice(1);
+  const subCmd = args[1];
 
   switch (command) {
     case 'models':
-      await cmdModels(subArgs);
+      await cmdModels();
       break;
     case 'model':
-      const modelSubCmd = subArgs[0] || 'show';
-      if (modelSubCmd === 'show') {
-        await cmdModelShow(subArgs.slice(1));
-      } else if (modelSubCmd === 'set') {
-        await cmdModelSet(subArgs.slice(1));
-      } else {
-        console.error(`Unknown model subcommand: ${modelSubCmd}`);
-        console.error('Use: model show | model set <id>');
-        process.exit(1);
-      }
+      await cmdModel();
       break;
     case 'provider':
-      const providerSubCmd = subArgs[0] || 'list';
-      if (providerSubCmd === 'list') {
-        await cmdProviderList(subArgs.slice(1));
-      } else if (providerSubCmd === 'add') {
-        await cmdProviderAdd(subArgs.slice(1));
-      } else if (providerSubCmd === 'remove') {
-        await cmdProviderRemove(subArgs.slice(1));
-      } else if (providerSubCmd === 'test') {
-        await cmdProviderTest(subArgs.slice(1));
+      if (subCmd === 'list') {
+        await cmdProviderList();
+      } else if (subCmd === 'add') {
+        await cmdProviderAdd();
+      } else if (subCmd === 'remove' || subCmd === 'rm') {
+        await cmdProviderRemove();
+      } else if (subCmd === 'test') {
+        await cmdProviderTest();
       } else {
-        console.error(`Unknown provider subcommand: ${providerSubCmd}`);
-        console.error('Use: provider list | provider add | provider remove | provider test');
-        process.exit(1);
+        console.log('用法: node cli.js provider <list|add|remove|test>');
       }
       break;
     case 'health':
-      await cmdHealth(subArgs);
+      await cmdHealth();
       break;
     case 'help':
     case '--help':
@@ -592,13 +791,13 @@ async function main() {
       printHelp();
       break;
     default:
-      console.error(`Unknown command: ${command}`);
+      console.log(`未知命令: ${command}`);
       printHelp();
       process.exit(1);
   }
 }
 
 main().catch(err => {
-  console.error('Error:', err.message);
+  console.error('错误:', err.message);
   process.exit(1);
 });
