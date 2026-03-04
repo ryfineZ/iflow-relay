@@ -321,6 +321,17 @@ function load() {
       // 视觉提取器专用 upstream：优先选 iFlow，保证 Qwen3-VL-Plus 可用
       extractorUpstream: upstreams.find(u => u.url.includes('iflow')) || upstreams[0],
     },
+    // ACP 模式配置（通过官方 iFlow CLI 通信，避免封号）
+    acp: {
+      enabled: getBool('ACP_ENABLED', false),
+      port: getInt('ACP_PORT', 8090),
+      timeout: getInt('ACP_TIMEOUT', 180),
+      debug: getBool('ACP_DEBUG', false),
+      // ACP 模式下自动启动 iFlow CLI
+      autoStart: getBool('ACP_AUTO_START', false),
+      // ACP 启动命令
+      startCommand: getEnv('ACP_START_COMMAND', 'iflow'),
+    },
   };
 }
 

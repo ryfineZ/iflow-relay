@@ -8,10 +8,11 @@
 
 1. [概述](#概述)
 2. [架构设计](#架构设计)
-3. [对抗检测措施](#对抗检测措施)
-4. [配置说明](#配置说明)
-5. [使用指南](#使用指南)
-6. [已知问题](#已知问题)
+3. [ACP 模式](#acp-模式)
+4. [对抗检测措施](#对抗检测措施)
+5. [配置说明](#配置说明)
+6. [使用指南](#使用指南)
+7. [已知问题](#已知问题)
 
 ---
 
@@ -23,9 +24,11 @@
 - **请求伪装**：模拟官方 iFlow CLI 的请求特征
 - **多上游支持**：支持多个上游 API，自动选择最快的
 - **流式响应**：完整支持 SSE 流式输出
+- **ACP 模式**：通过官方 iFlow CLI 通信，避免封号风险
 
 ### 项目定位
 
+**HTTP 模式：**
 ```
 ┌─────────────┐     ┌───────────────┐     ┌────────────┐
 │   Client    │────▶│  iflow-relay  │────▶│  iFlow API │
@@ -37,6 +40,16 @@
                     │  元景 API  │
                     │ (备用上游)  │
                     └────────────┘
+```
+
+**ACP 模式（推荐）：**
+```
+┌─────────────┐     ┌───────────────┐     ┌─────────────┐     ┌────────────┐
+│   Client    │────▶│  iflow-relay  │────▶│  iFlow CLI  │────▶│  iFlow API │
+│ (OpenClaw)  │     │  (ACP 模式)    │     │ (官方客户端) │     │            │
+└─────────────┘     └───────────────┘     └─────────────┘     └────────────┘
+                                                 │
+                           WebSocket JSON-RPC ◀──┘
 ```
 
 ---
@@ -131,6 +144,183 @@ Client Request
          │
          ▼
 Client Response
+```
+
+---
+
+## ACP 模式
+
+ACP (Agent Communication Protocol) 是 iFlow CLI 的官方通信协议，通过 WebSocket JSON-RPC 2.0 与本地 CLI 通信。
+
+### 为什么使用 ACP 模式？
+
+HTTP 模式虽然模拟了请求头和 TLS 指纹，但服务端仍可能通过其他特征检测代理行为：
+
+| 检测维度 | HTTP 模式 | ACP 模式 |
+|---------|----------|----------|
+| 请求头 | ✅ 模拟 | ✅ 完全一致 |
+| TLS 指纹 | ✅ 一致 | ✅ 完全一致 |
+| WebSocket 协议 | ❌ 不适用 | ✅ 官方实现 |
+| 会话管理 | ⚠️ 自行管理 | ✅ 官方管理 |
+| 行为模式 | ⚠️ 可能差异 | ✅ 完全一致 |
+
+**ACP 模式优势**：
+- 使用官方 CLI 的完整行为
+- 自动复用 `iflow login` 的凭证
+- 无需手动配置 API Key
+- 完全避免因请求特征差异导致封号
+
+### ACP 协议流程
+
+```
+Client                 iflow-relay               iFlow CLI
+   │                        │                         │
+   │  HTTP Request          │                         │
+   │───────────────────────▶│                         │
+   │                        │  WebSocket Connect      │
+   │                        │────────────────────────▶│
+   │                        │  //ready                │
+   │                        │◀────────────────────────│
+   │                        │  initialize             │
+   │                        │────────────────────────▶│
+   │                        │  {authMethods: [...]}   │
+   │                        │◀────────────────────────│
+   │                        │  session/new            │
+   │                        │────────────────────────▶│
+   │                        │  {sessionId: "..."}     │
+   │                        │◀────────────────────────│
+   │                        │  session/prompt         │
+   │                        │────────────────────────▶│
+   │                        │  session/update (流式)   │
+   │                        │◀────────────────────────│
+   │                        │  stopReason             │
+   │                        │◀────────────────────────│
+   │  HTTP Response         │                         │
+   │◀───────────────────────│                         │
+```
+
+### ACP 消息格式
+
+**1. 控制消息**
+```
+//ready
+```
+服务端就绪信号。
+
+**2. 初始化请求**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": 1,
+    "clientCapabilities": {
+      "fs": { "readTextFile": true, "writeTextFile": true }
+    },
+    "mcpServers": [],
+    "hooks": {},
+    "commands": [],
+    "agents": []
+  }
+}
+```
+
+**3. 创建会话**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "session/new",
+  "params": {
+    "cwd": "/path/to/workdir",
+    "mcpServers": [],
+    "settings": {
+      "permission_mode": "yolo",
+      "thinking": true,
+      "model": "glm-5"
+    }
+  }
+}
+```
+
+**4. 发送 Prompt**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "session/prompt",
+  "params": {
+    "sessionId": "xxx-xxx-xxx",
+    "prompt": [{ "type": "text", "text": "Hello" }]
+  }
+}
+```
+
+**5. 流式响应**
+```json
+{
+  "method": "session/update",
+  "params": {
+    "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": { "text": "Hello!" }
+    }
+  }
+}
+```
+
+### 文件结构
+
+```
+src/
+├── acp.js           # ACP 客户端实现
+├── config.js        # ACP 配置解析
+├── server.js        # ACP 模式路由
+├── iflow.js         # HTTP 模式请求
+└── ...
+```
+
+### 模式切换逻辑
+
+```javascript
+// src/server.js
+async function handleOpenAICompletions(cfg, req, res) {
+  // 1. 检查 ACP 是否启用
+  if (await shouldUseAcp(cfg)) {
+    // 使用 ACP 模式（通过 iFlow CLI）
+    return handleOpenAICompletionsViaAcp(cfg, bodyObj, stream, res);
+  }
+
+  // 2. 回退到 HTTP 模式
+  const { upstream, idx } = pickUpstream(cfg);
+  // ... HTTP 请求逻辑
+}
+```
+
+### 配置示例
+
+```bash
+# .env
+# 启用 ACP 模式
+ACP_ENABLED=true
+ACP_PORT=8090
+ACP_TIMEOUT=180
+ACP_DEBUG=false
+```
+
+### 启动流程
+
+```bash
+# 1. 安装并登录 iFlow CLI
+npm install -g @anthropics/iflow-cli
+iflow login
+
+# 2. 启动 iFlow CLI（ACP 模式）
+iflow --acp-port 8090 &
+
+# 3. 启动 iflow-relay
+npm start
 ```
 
 ---
@@ -419,7 +609,7 @@ curl http://localhost:8327/v1/chat/completions \
 
 ## 已知问题
 
-### 1. 账号封禁风险
+### 1. 账号封禁风险（HTTP 模式）
 
 iFlow 服务可能检测到代理行为并封禁账号，原因可能包括：
 
@@ -427,7 +617,24 @@ iFlow 服务可能检测到代理行为并封禁账号，原因可能包括：
 - **内容特征**：即使混淆也可能被检测
 - **账号关联**：多账号共用设备/IP
 
-**建议**：
+**推荐解决方案：使用 ACP 模式**
+
+ACP 模式通过本地 iFlow CLI 通信，使用官方客户端的完整行为，是目前最安全的方案：
+
+```bash
+# 启用 ACP 模式
+ACP_ENABLED=true
+
+# 启动 iFlow CLI
+iflow --acp-port 8090 &
+
+# 启动 iflow-relay
+npm start
+```
+
+详见 [ACP 模式](#acp-模式) 章节。
+
+**其他建议**：
 - 使用元景等官方 API 作为备用
 - 避免高频、长时间使用
 - 不要在同一账号下混用多种客户端
@@ -465,7 +672,8 @@ iflow-relay/
 ├── .env.example
 ├── src/
 │   ├── config.js      # 配置加载
-│   ├── iflow.js       # 核心请求逻辑
+│   ├── iflow.js       # 核心请求逻辑（HTTP 模式）
+│   ├── acp.js         # ACP 客户端（ACP 模式）
 │   ├── server.js      # HTTP 服务器
 │   ├── anthropic.js   # Anthropic 协议转换
 │   └── multimodal.js  # 多模态处理
@@ -483,6 +691,11 @@ iflow-relay/
 ---
 
 ## 更新日志
+
+### 2026-03-05
+- 新增 ACP 模式，通过官方 iFlow CLI 通信，避免封号风险
+- 支持 OpenAI 格式流式响应
+- 新增 `/health/acp` 端点检查 ACP 状态
 
 ### 2026-03-04
 - 修复 `accept-encoding` 与官方 CLI 一致（移除 br）

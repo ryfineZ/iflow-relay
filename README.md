@@ -12,6 +12,7 @@
 - **多上游支持**：支持多个上游 API，自动选择最快的
 - **签名认证**：支持 iFlow API 签名机制
 - **流式响应**：完整支持 SSE 流式输出
+- **ACP 模式**：通过官方 iFlow CLI 通信，避免封号风险
 
 ## 为什么使用 Node.js？
 
@@ -35,6 +36,10 @@ iflow-relay 请求    → Node.js HTTP Client → TLS 指纹 A (相同)
 
 ## 架构
 
+iflow-relay 支持两种模式：
+
+### HTTP 模式（默认）
+
 ```
 ┌─────────────┐     ┌───────────────┐     ┌────────────┐
 │   Client    │────▶│  iflow-relay  │────▶│  iFlow API │
@@ -47,6 +52,26 @@ iflow-relay 请求    → Node.js HTTP Client → TLS 指纹 A (相同)
                     │ (备用/视觉) │
                     └────────────┘
 ```
+
+### ACP 模式（推荐）
+
+ACP (Agent Communication Protocol) 模式通过本地 iFlow CLI 通信，使用官方客户端的完整行为：
+
+```
+┌─────────────┐     ┌───────────────┐     ┌─────────────┐     ┌────────────┐
+│   Client    │────▶│  iflow-relay  │────▶│  iFlow CLI  │────▶│  iFlow API │
+│ (OpenClaw)  │     │  (ACP 模式)    │     │ (官方客户端) │     │            │
+└─────────────┘     └───────────────┘     └─────────────┘     └────────────┘
+                                                 │
+                           WebSocket JSON-RPC ◀──┘
+                           (完全模拟官方行为)
+```
+
+**ACP 模式优势**：
+- ✅ 使用官方 CLI，请求行为完全一致
+- ✅ 避免因请求特征差异导致封号
+- ✅ 支持流式响应
+- ✅ 自动管理会话
 
 详细架构和对抗检测措施请查看 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
@@ -161,6 +186,67 @@ MM_TIMEOUT_MS=12000                  # 视觉提取超时
 | `PROXY_STREAM_HEARTBEAT_MS` | `15000` | 流式心跳间隔 |
 | `LOG_REQUEST_HEADERS` | `false` | 记录请求头 |
 | `SENSITIVE_WORDS` | 见说明 | 敏感词列表（留空禁用） |
+
+## ACP 模式
+
+ACP (Agent Communication Protocol) 模式通过本地 iFlow CLI 通信，使用官方客户端的完整行为，是目前最安全的方案。
+
+### 为什么推荐 ACP 模式？
+
+HTTP 模式虽然模拟了请求头和 TLS 指纹，但服务端仍可能通过其他特征检测代理行为。ACP 模式直接复用官方 CLI：
+
+- **完全一致的请求行为**：使用官方 CLI 的 WebSocket 协议
+- **自动处理认证**：复用 `iflow login` 的凭证
+- **无需配置 API Key**：从 `~/.iflow/` 自动读取
+
+### 启用 ACP 模式
+
+```bash
+# 1. 安装 iFlow CLI
+npm install -g @anthropics/iflow-cli
+
+# 2. 登录
+iflow login
+
+# 3. 启动 iFlow CLI（ACP 服务器模式）
+iflow --acp-port 8090 &
+
+# 4. 配置 iflow-relay
+ACP_ENABLED=true
+ACP_PORT=8090
+
+# 5. 启动 iflow-relay
+npm start
+```
+
+### ACP 配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ACP_ENABLED` | `false` | 启用 ACP 模式 |
+| `ACP_PORT` | `8090` | iFlow CLI ACP 端口 |
+| `ACP_TIMEOUT` | `180` | ACP 请求超时（秒） |
+| `ACP_DEBUG` | `false` | 启用 ACP 调试日志 |
+
+### ACP 模式工作原理
+
+```
+1. iflow-relay 检测到 ACP_ENABLED=true
+2. 检测本地 iFlow CLI 是否运行 (ws://127.0.0.1:8090/acp)
+3. 如 iFlow CLI 可用，使用 ACP 协议通信
+4. 否则回退到 HTTP 模式
+```
+
+### 健康检查
+
+```bash
+# 基础健康检查
+curl http://localhost:8327/health
+
+# ACP 状态检查
+curl http://localhost:8327/health/acp
+# {"status":"ok","acp":{"enabled":true,"available":true,"connected":true,"port":8090}}
+```
 
 ## 对抗检测
 

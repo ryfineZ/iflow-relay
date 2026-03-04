@@ -4,6 +4,7 @@ const zlib = require('zlib');
 const { requestIDs, parseIFlowBusinessStatusError, summarizeErrorBody, executeIFlowRequest, executeIFlowRequestStream } = require('./iflow.js');
 const { convertAnthropicToOpenAI, convertOpenAIToAnthropic, writeAnthropicSSE, writeAnthropicSSEError, estimateInputTokens } = require('./anthropic.js');
 const { maybeApplyMultimodalBridge } = require('./multimodal.js');
+const { AcpClient, messagesToPrompt, detectAcpServer } = require('./acp.js');
 
 // ─── 敏感词混淆 ──────────────────────────────────────────────────────────────
 
@@ -301,6 +302,158 @@ function parseOpenAIStreamNetworkError(line) {
   return { code: 502, msg: `iflow upstream stream network_error for model ${model}` };
 }
 
+// ─── ACP Mode Handler ──────────────────────────────────────────────────────────
+
+// ACP 客户端池（复用连接）
+let acpClientPool = null;
+
+async function getAcpClient(cfg) {
+  if (acpClientPool && acpClientPool.isConnected()) {
+    return acpClientPool;
+  }
+
+  const client = new AcpClient({
+    port: cfg.acp.port,
+    timeout: cfg.acp.timeout,
+    debug: cfg.acp.debug,
+  });
+
+  await client.connect();
+  acpClientPool = client;
+  return client;
+}
+
+/**
+ * 检查是否应该使用 ACP 模式
+ * @param {object} cfg - 配置
+ * @returns {Promise<boolean>}
+ */
+async function shouldUseAcp(cfg) {
+  if (!cfg.acp.enabled) return false;
+
+  // 检测 iFlow CLI 是否运行
+  const available = await detectAcpServer(cfg.acp.port, 2000);
+  if (!available) {
+    console.log('[acp] iFlow CLI not detected on port', cfg.acp.port);
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * 使用 ACP 模式处理 OpenAI 格式请求
+ * @param {object} cfg - 配置
+ * @param {object} bodyObj - OpenAI 格式请求体
+ * @param {boolean} stream - 是否流式响应
+ * @param {http.ServerResponse} res - 响应对象
+ */
+async function handleOpenAICompletionsViaAcp(cfg, bodyObj, stream, res) {
+  const model = bodyObj.model || cfg.defaultModel || 'glm-5';
+  const messages = bodyObj.messages || [];
+
+  if (messages.length === 0) {
+    writeError(res, 400, 'messages is required');
+    return;
+  }
+
+  try {
+    const client = await getAcpClient(cfg);
+
+    // 创建 session
+    await client.createSession({ model });
+
+    if (stream) {
+      // 流式响应
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.writeHead(200);
+
+      const completionId = `acp-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+      const created = Math.floor(Date.now() / 1000);
+
+      // 发送初始角色
+      const roleChunk = {
+        id: completionId,
+        object: 'chat.completion.chunk',
+        created,
+        model,
+        choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+      };
+      res.write(`data: ${JSON.stringify(roleChunk)}\n\n`);
+
+      // 发送 prompt 并收集流式响应
+      const prompt = messagesToPrompt(messages);
+      let fullContent = '';
+
+      await client.prompt(prompt, {
+        model,
+        onChunk: (chunk) => {
+          fullContent += chunk;
+          const contentChunk = {
+            id: completionId,
+            object: 'chat.completion.chunk',
+            created,
+            model,
+            choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }],
+          };
+          res.write(`data: ${JSON.stringify(contentChunk)}\n\n`);
+        },
+      });
+
+      // 发送结束
+      const finishChunk = {
+        id: completionId,
+        object: 'chat.completion.chunk',
+        created,
+        model,
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      };
+      res.write(`data: ${JSON.stringify(finishChunk)}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } else {
+      // 非流式响应
+      const prompt = messagesToPrompt(messages);
+      const result = await client.prompt(prompt, { model });
+
+      const completionId = `acp-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+      const created = Math.floor(Date.now() / 1000);
+
+      const response = {
+        id: completionId,
+        object: 'chat.completion',
+        created,
+        model,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: result.text },
+          finish_reason: 'stop',
+        }],
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+        },
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.writeHead(200);
+      res.end(JSON.stringify(response));
+    }
+  } catch (err) {
+    console.error('[acp] error:', err.message);
+    if (!res.headersSent) {
+      writeError(res, 502, `ACP error: ${err.message}`);
+    } else {
+      writeSSEError(res, 502, `ACP error: ${err.message}`);
+      res.end();
+    }
+  }
+}
+
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 function handleHealth(req, res) {
@@ -308,6 +461,37 @@ function handleHealth(req, res) {
   res.setHeader('Content-Type', 'application/json');
   res.writeHead(200);
   res.end('{"status":"ok"}');
+}
+
+async function handleAcpHealth(cfg, req, res) {
+  if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
+
+  const acpEnabled = cfg.acp.enabled;
+  let acpAvailable = false;
+  let acpConnected = false;
+
+  if (acpEnabled) {
+    try {
+      acpAvailable = await detectAcpServer(cfg.acp.port, 2000);
+      if (acpClientPool && acpClientPool.isConnected()) {
+        acpConnected = true;
+      }
+    } catch (err) {
+      console.error('[acp] health check error:', err.message);
+    }
+  }
+
+  res.setHeader('Content-Type', 'application/json');
+  res.writeHead(200);
+  res.end(JSON.stringify({
+    status: 'ok',
+    acp: {
+      enabled: acpEnabled,
+      available: acpAvailable,
+      connected: acpConnected,
+      port: cfg.acp.port,
+    },
+  }, null, 2));
 }
 
 function handleModels(cfg, req, res) {
@@ -354,6 +538,13 @@ async function handleOpenAICompletions(cfg, req, res) {
   }
   if (!model) { writeError(res, 400, 'model is required'); return; }
 
+  // 检查是否使用 ACP 模式
+  if (await shouldUseAcp(cfg)) {
+    console.log('[server] using ACP mode (via iFlow CLI)');
+    return handleOpenAICompletionsViaAcp(cfg, bodyObj, stream, res);
+  }
+
+  // 以下是原来的 HTTP 模式
   const { upstream, idx } = pickUpstream(cfg);
   const endpoint = upstream.url + '/chat/completions';
   const { sessionID, conversationID } = requestIDs(bodyObj);
@@ -699,6 +890,7 @@ function createHandler(cfg) {
 
     try {
       if (url === '/health') return handleHealth(req, res);
+      if (url === '/health/acp') return await handleAcpHealth(cfg, req, res);
       if (url === '/v1/models' || url === '/models') return handleModels(cfg, req, res);
       if (url.startsWith('/v1/models/')) return handleModelByID(cfg, req, res, url.slice('/v1/models/'.length));
       if (url.startsWith('/models/')) return handleModelByID(cfg, req, res, url.slice('/models/'.length));
