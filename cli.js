@@ -285,6 +285,218 @@ async function cmdHealth(args) {
   }
 }
 
+// ─── Provider 命令 ──────────────────────────────────────────────────────────────
+
+async function cmdProviderList(args) {
+  const config = loadConfig();
+
+  if (config.upstreams.length === 0) {
+    console.log('No providers configured.');
+    console.log('\nTo add a provider:');
+    console.log('  iflow-relay provider add <url> <key> [--sign]');
+    return;
+  }
+
+  console.log(`Configured providers (${config.upstreams.length}):\n`);
+
+  config.upstreams.forEach((u, i) => {
+    const name = u.url.includes('iflow') ? 'iFlow' : `provider-${i + 1}`;
+    const sign = u.sign ? 'yes' : 'no';
+    console.log(`  [${i + 1}] ${name}`);
+    console.log(`      URL: ${u.url}`);
+    console.log(`      Key: ${u.key.substring(0, 10)}...${u.key.substring(u.key.length - 4)}`);
+    console.log(`      Sign: ${sign}`);
+    console.log('');
+  });
+}
+
+async function cmdProviderAdd(args) {
+  if (args.length < 2) {
+    console.error('Error: URL and API key required.');
+    console.error('Usage: iflow-relay provider add <url> <key> [--sign]');
+    console.error('');
+    console.error('Options:');
+    console.error('  --sign    Enable request signing (for iFlow API)');
+    console.error('');
+    console.error('Examples:');
+    console.error('  iflow-relay provider add https://apis.iflow.cn/v1 sk-xxx --sign');
+    console.error('  iflow-relay provider add https://api.openai.com/v1 sk-yyy');
+    process.exit(1);
+  }
+
+  let url = args[0];
+  const key = args[1];
+  const enableSign = args.includes('--sign');
+
+  // 移除末尾斜杠
+  url = url.replace(/\/$/, '');
+
+  // 验证 URL
+  try {
+    new URL(url);
+  } catch (e) {
+    console.error(`Error: Invalid URL: ${url}`);
+    process.exit(1);
+  }
+
+  // 验证 key
+  if (!key || key.length < 10) {
+    console.error('Error: API key seems too short');
+    process.exit(1);
+  }
+
+  const envPath = path.join(process.cwd(), '.env');
+
+  // 读取现有 .env
+  let content = '';
+  if (fs.existsSync(envPath)) {
+    content = fs.readFileSync(envPath, 'utf-8');
+  }
+
+  // 找到下一个可用的 provider 编号
+  const lines = content.split('\n');
+  let maxNum = 0;
+  lines.forEach(line => {
+    const match = line.match(/^UPSTREAM_(\d+)_URL=/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > maxNum) maxNum = num;
+    }
+  });
+
+  const nextNum = maxNum + 1;
+
+  // 添加新 provider
+  const newLines = [
+    '',
+    `# Provider ${nextNum} (added ${new Date().toISOString().split('T')[0]})`,
+    `UPSTREAM_${nextNum}_URL=${url}`,
+    `UPSTREAM_${nextNum}_KEY=${key}`,
+    `UPSTREAM_${nextNum}_SIGN=${enableSign}`,
+  ];
+
+  fs.writeFileSync(envPath, content + newLines.join('\n'), 'utf-8');
+
+  console.log(`Provider ${nextNum} added:`);
+  console.log(`  URL: ${url}`);
+  console.log(`  Key: ${key.substring(0, 10)}...${key.substring(key.length - 4)}`);
+  console.log(`  Sign: ${enableSign ? 'yes' : 'no'}`);
+  console.log(`\nUpdated: ${envPath}`);
+  console.log('Restart iflow-relay for changes to take effect.');
+}
+
+async function cmdProviderRemove(args) {
+  const num = parseInt(args[0], 10);
+
+  if (!num || num < 1) {
+    console.error('Error: Provider number required.');
+    console.error('Usage: iflow-relay provider remove <number>');
+    console.error('');
+    console.error('Use "iflow-relay provider list" to see provider numbers.');
+    process.exit(1);
+  }
+
+  const envPath = path.join(process.cwd(), '.env');
+
+  if (!fs.existsSync(envPath)) {
+    console.error('Error: .env file not found');
+    process.exit(1);
+  }
+
+  const content = fs.readFileSync(envPath, 'utf-8');
+  const lines = content.split('\n');
+
+  // 查找要删除的 provider
+  const urlPattern = new RegExp(`^UPSTREAM_${num}_URL=`);
+  const keyPattern = new RegExp(`^UPSTREAM_${num}_KEY=`);
+  const signPattern = new RegExp(`^UPSTREAM_${num}_SIGN=`);
+
+  let found = false;
+  const newLines = [];
+  let skipComment = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // 跳过相关注释
+    if (line.match(new RegExp(`^# Provider ${num} `))) {
+      skipComment = true;
+      found = true;
+      continue;
+    }
+
+    // 跳过相关配置行
+    if (line.match(urlPattern) || line.match(keyPattern) || line.match(signPattern)) {
+      found = true;
+      continue;
+    }
+
+    // 跳过空行（在注释后）
+    if (skipComment && line.trim() === '') {
+      skipComment = false;
+      continue;
+    }
+
+    skipComment = false;
+    newLines.push(line);
+  }
+
+  if (!found) {
+    console.error(`Error: Provider ${num} not found.`);
+    console.error('Use "iflow-relay provider list" to see provider numbers.');
+    process.exit(1);
+  }
+
+  fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
+
+  console.log(`Provider ${num} removed.`);
+  console.log(`Updated: ${envPath}`);
+  console.log('Restart iflow-relay for changes to take effect.');
+}
+
+async function cmdProviderTest(args) {
+  const config = loadConfig();
+  const num = parseInt(args[0], 10);
+
+  if (!num || num < 1 || num > config.upstreams.length) {
+    console.error('Error: Invalid provider number.');
+    console.error('Use "iflow-relay provider list" to see provider numbers.');
+    process.exit(1);
+  }
+
+  const upstream = config.upstreams[num - 1];
+  const name = upstream.url.includes('iflow') ? 'iFlow' : `provider-${num}`;
+
+  console.log(`Testing provider ${num} (${name})...`);
+  console.log(`URL: ${upstream.url}`);
+
+  try {
+    const startTime = Date.now();
+    const response = await httpRequest(`${upstream.url}/models`, {
+      headers: {
+        'authorization': `Bearer ${upstream.key}`,
+        'user-agent': 'iFlow-Cli',
+        'accept': '*/*',
+      },
+      timeout: 15000,
+    });
+    const latency = Date.now() - startTime;
+
+    if (response.statusCode === 200) {
+      const json = JSON.parse(response.data);
+      const modelCount = json.data ? json.data.length : 0;
+      console.log(`\n✅ Provider ${num} is working`);
+      console.log(`   Latency: ${latency}ms`);
+      console.log(`   Models: ${modelCount}`);
+    } else {
+      console.log(`\n❌ Provider ${num} returned status ${response.statusCode}`);
+      console.log(`   Response: ${response.data.substring(0, 200)}`);
+    }
+  } catch (err) {
+    console.log(`\n❌ Provider ${num} failed: ${err.message}`);
+  }
+}
+
 // ─── 帮助信息 ──────────────────────────────────────────────────────────────────
 
 function printHelp() {
@@ -295,20 +507,30 @@ Usage:
   iflow-relay <command> [args]
 
 Commands:
-  models              List all available models from upstreams
-  model show          Show current model configuration
-  model set <id>      Set default model
-  health              Check service health status
+  models                    List all available models from upstreams
+  model show                Show current model configuration
+  model set <id>            Set default model
+  provider list             List configured providers
+  provider add <url> <key> [--sign]   Add a new provider
+  provider remove <num>     Remove a provider
+  provider test <num>       Test provider connection
+  health                    Check service health status
 
 Examples:
   iflow-relay models
   iflow-relay model set qwen3-max
+  iflow-relay provider list
+  iflow-relay provider add https://apis.iflow.cn/v1 sk-xxx --sign
+  iflow-relay provider add https://api.openai.com/v1 sk-yyy
+  iflow-relay provider remove 2
+  iflow-relay provider test 1
   iflow-relay health
 
 Environment Variables:
   PORT                Server port (default: 8327)
   UPSTREAM_1_URL      Upstream API URL
   UPSTREAM_1_KEY      Upstream API key
+  UPSTREAM_1_SIGN     Enable signing (true/false)
   DEFAULT_MODEL       Default model ID
   ACP_ENABLED         Enable ACP mode (true/false)
   ACP_PORT            ACP server port (default: 8090)
@@ -327,14 +549,30 @@ async function main() {
       await cmdModels(subArgs);
       break;
     case 'model':
-      const subCmd = subArgs[0] || 'show';
-      if (subCmd === 'show') {
+      const modelSubCmd = subArgs[0] || 'show';
+      if (modelSubCmd === 'show') {
         await cmdModelShow(subArgs.slice(1));
-      } else if (subCmd === 'set') {
+      } else if (modelSubCmd === 'set') {
         await cmdModelSet(subArgs.slice(1));
       } else {
-        console.error(`Unknown model subcommand: ${subCmd}`);
+        console.error(`Unknown model subcommand: ${modelSubCmd}`);
         console.error('Use: model show | model set <id>');
+        process.exit(1);
+      }
+      break;
+    case 'provider':
+      const providerSubCmd = subArgs[0] || 'list';
+      if (providerSubCmd === 'list') {
+        await cmdProviderList(subArgs.slice(1));
+      } else if (providerSubCmd === 'add') {
+        await cmdProviderAdd(subArgs.slice(1));
+      } else if (providerSubCmd === 'remove') {
+        await cmdProviderRemove(subArgs.slice(1));
+      } else if (providerSubCmd === 'test') {
+        await cmdProviderTest(subArgs.slice(1));
+      } else {
+        console.error(`Unknown provider subcommand: ${providerSubCmd}`);
+        console.error('Use: provider list | provider add | provider remove | provider test');
         process.exit(1);
       }
       break;
