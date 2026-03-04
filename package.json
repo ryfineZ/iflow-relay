@@ -1,11 +1,10 @@
 {
   "name": "iflow-relay",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "iFlow reverse proxy relay — Node.js rewrite with ACP support",
   "main": "index.js",
-  "bin": "index.js",
-  "engines": {
-    "node": ">=18"
+  "bin": {
+    "iflow-relay": "./cli.js"
   },
   "scripts": {
     "start": "node index.js"
