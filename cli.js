@@ -928,6 +928,126 @@ async function cmdHealth() {
   }
 }
 
+async function cmdConfig() {
+  const args = process.argv.slice(2);
+  const subCmd = args[1];
+  const key = args[2];
+  const value = args[3];
+
+  if (subCmd === 'get') {
+    // 获取配置
+    if (!key) {
+      console.log('用法: iflow-relay config get <KEY>');
+      console.log('\n常用配置:');
+      console.log('  DEFAULT_MODEL        默认模型');
+      console.log('  MM_EXTRACTOR_MODEL   视觉提取模型');
+      console.log('  MM_ENABLED           多模态功能开关');
+      console.log('  UPSTREAM_STRATEGY    上游选择策略 (fastest/roundrobin)');
+      return;
+    }
+    const value = process.env[key];
+    if (value !== undefined) {
+      console.log(`${key}=${value}`);
+    } else {
+      // 尝试从 .env 读取
+      const envPath = path.join(process.cwd(), '.env');
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf-8');
+        const lines = content.split('\n');
+        for (const line of lines) {
+          if (line.startsWith(`${key}=`)) {
+            console.log(line);
+            return;
+          }
+        }
+      }
+      console.log(`${key} 未设置`);
+    }
+    return;
+  }
+
+  if (subCmd === 'set') {
+    // 设置配置
+    if (!key || value === undefined) {
+      console.log('用法: iflow-relay config set <KEY> <VALUE>');
+      console.log('\n示例:');
+      console.log('  iflow-relay config set DEFAULT_MODEL qwen-max');
+      console.log('  iflow-relay config set MM_EXTRACTOR_MODEL iFlow/qwen3-vl-plus');
+      return;
+    }
+
+    const envPath = path.join(process.cwd(), '.env');
+    let content = '';
+    if (fs.existsSync(envPath)) {
+      content = fs.readFileSync(envPath, 'utf-8');
+    }
+
+    const lines = content.split('\n');
+    let found = false;
+    const newLines = lines.map(line => {
+      if (line.startsWith(`${key}=`)) {
+        found = true;
+        return `${key}=${value}`;
+      }
+      return line;
+    });
+
+    if (!found) {
+      if (newLines.length > 0 && newLines[newLines.length - 1] !== '') {
+        newLines.push('');
+      }
+      newLines.push(`${key}=${value}`);
+    }
+
+    fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
+    console.log(`✅ 已设置 ${key}=${value}`);
+    console.log('重启 iflow-relay 使配置生效: npm start');
+    return;
+  }
+
+  if (subCmd === 'list') {
+    // 列出所有配置
+    const envPath = path.join(process.cwd(), '.env');
+    if (!fs.existsSync(envPath)) {
+      console.log('❌ .env 文件不存在');
+      return;
+    }
+
+    const content = fs.readFileSync(envPath, 'utf-8');
+    const lines = content.split('\n');
+
+    console.log('当前配置:\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#')) {
+        console.log(`  ${trimmed}`);
+      }
+    }
+    return;
+  }
+
+  // 默认显示帮助
+  console.log(`用法: iflow-relay config <command>
+
+命令:
+  get <KEY>     获取配置值
+  set <KEY> <VALUE>  设置配置值
+  list          列出所有配置
+
+常用配置:
+  DEFAULT_MODEL        默认模型
+  MM_EXTRACTOR_MODEL   视觉提取模型 (支持 provider/model 格式)
+  MM_ENABLED           多模态功能开关 (true/false)
+  UPSTREAM_STRATEGY    上游选择策略 (fastest/roundrobin)
+
+示例:
+  iflow-relay config get DEFAULT_MODEL
+  iflow-relay config set DEFAULT_MODEL iFlow/qwen3-max
+  iflow-relay config set MM_EXTRACTOR_MODEL aliyun/qwen-vl-max
+  iflow-relay config list
+`);
+}
+
 // ─── 帮助信息 ────────────────────────────────────────────────────────────────
 
 function printHelp() {
@@ -945,18 +1065,24 @@ iflow-relay CLI - 管理 iflow-relay 代理
   provider remove             删除 Provider
   provider test               测试 Provider 连接
   provider name               设置 Provider 名称
+  config get <KEY>            获取配置值
+  config set <KEY> <VALUE>    设置配置值
+  config list                 列出所有配置
   health                      检查服务状态
 
 模型别名格式:
   provider/model    例如: iFlow/qwen3-max
 
+常用配置:
+  DEFAULT_MODEL        默认模型
+  MM_EXTRACTOR_MODEL   视觉提取模型
+
 示例:
   iflow-relay models
-  iflow-relay model
   iflow-relay provider add
-  iflow-relay provider test
-  iflow-relay provider name
-  iflow-relay health
+  iflow-relay config set DEFAULT_MODEL iFlow/qwen3-max
+  iflow-relay config set MM_EXTRACTOR_MODEL aliyun/qwen-vl-max
+  iflow-relay config list
 `);
 }
 
@@ -988,6 +1114,9 @@ async function main() {
       } else {
         console.log('用法: iflow-relay provider <list|add|remove|test|name>');
       }
+      break;
+    case 'config':
+      await cmdConfig();
       break;
     case 'health':
       await cmdHealth();
