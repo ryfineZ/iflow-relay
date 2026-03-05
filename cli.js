@@ -340,7 +340,7 @@ function updateEnvLine(key, value) {
   fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
 }
 
-function addProviderToEnv(url, key, sign, name) {
+function addProviderToEnv(url, key, sign, name, defaultModel = null) {
   const envPath = path.join(process.cwd(), '.env');
   let content = '';
   if (fs.existsSync(envPath)) {
@@ -348,9 +348,9 @@ function addProviderToEnv(url, key, sign, name) {
   }
 
   const num = getNextProviderNum();
-  const providerName = name || (url.includes('iflow') ? 'iFlow' : `provider-${num}`);
+  const providerName = name || (sign ? 'iFlow' : `provider-${num}`);
 
-  const newContent = content +
+  let newContent = content +
     (content && !content.endsWith('\n') ? '\n' : '') +
     `\n# Provider ${num}: ${providerName} (added ${new Date().toISOString().split('T')[0]})\n` +
     `UPSTREAM_${num}_URL=${url}\n` +
@@ -358,8 +358,16 @@ function addProviderToEnv(url, key, sign, name) {
     `UPSTREAM_${num}_SIGN=${sign}\n` +
     `UPSTREAM_${num}_NAME=${providerName}\n`;
 
+  // 如果提供了默认模型，也写入 DEFAULT_MODEL
+  if (defaultModel) {
+    // 检查是否已有 DEFAULT_MODEL
+    if (!content.includes('DEFAULT_MODEL=')) {
+      newContent += `DEFAULT_MODEL=${defaultModel}\n`;
+    }
+  }
+
   fs.writeFileSync(envPath, newContent, 'utf-8');
-  return { num, name: providerName };
+  return { num, name: providerName, defaultModel };
 }
 
 function removeProviderFromEnv(num) {
@@ -503,10 +511,19 @@ async function cmdProviderAdd() {
     const result = await testProvider(url, key);
 
     if (result.success) {
+      let defaultModel = null;
+
       if (result.warning) {
         // 连接成功但模型列表不可用
         console.log(`\n⚠️  连接成功 (${result.latency}ms)`);
         console.log(`   ${result.warning.split('\n').join('\n   ')}`);
+        console.log('');
+
+        // 询问默认模型
+        const inputModel = await question(rl, '请输入默认模型名称 (留空跳过)', '');
+        if (inputModel.trim()) {
+          defaultModel = inputModel.trim();
+        }
       } else {
         // 完全成功
         console.log(`\n✅ 连接成功!`);
@@ -520,8 +537,11 @@ async function cmdProviderAdd() {
       // 询问是否保存
       const save = await questionYesNo(rl, '\n是否保存此 Provider?', 'y');
       if (save) {
-        const { num, name } = addProviderToEnv(url, key, isIFlow);
+        const { num, name } = addProviderToEnv(url, key, isIFlow, null, defaultModel);
         console.log(`\n✅ Provider ${num} (${name}) 已保存到 .env`);
+        if (defaultModel) {
+          console.log(`   默认模型: ${defaultModel}`);
+        }
         console.log('重启 iflow-relay 使配置生效: npm start');
       } else {
         console.log('\n已取消保存');
