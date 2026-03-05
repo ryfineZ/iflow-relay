@@ -575,7 +575,12 @@ async function cmdProviderAdd() {
       // 询问是否保存
       const save = await questionYesNo(rl, '\n是否保存此 Provider?', 'y');
       if (save) {
-        const { num, name } = addProviderToEnv(url, key, isIFlow, null, models);
+        // 询问 Provider 名称
+        const defaultName = isIFlow ? 'iFlow' : `provider-${getNextProviderNum()}`;
+        const inputName = await question(rl, 'Provider 名称', defaultName);
+        const providerName = inputName.trim() || defaultName;
+
+        const { num, name } = addProviderToEnv(url, key, isIFlow, providerName, models);
         console.log(`\n✅ Provider ${num} (${name}) 已保存到 .env`);
         if (models && models.length > 0) {
           console.log(`   模型列表: ${models.join(', ')}`);
@@ -605,7 +610,12 @@ async function cmdProviderAdd() {
           await cmdProviderAdd();
           return;
         } else if (choice === '2') {
-          const { num, name } = addProviderToEnv(url, key, isIFlow);
+          // 询问 Provider 名称
+          const defaultName = isIFlow ? 'iFlow' : `provider-${getNextProviderNum()}`;
+          const inputName = await question(rl, 'Provider 名称', defaultName);
+          const providerName = inputName.trim() || defaultName;
+
+          const { num, name } = addProviderToEnv(url, key, isIFlow, providerName);
           console.log(`\n✅ Provider ${num} (${name}) 已保存到 .env (未验证)`);
           console.log('重启 iflow-relay 使配置生效: npm start');
           break;
