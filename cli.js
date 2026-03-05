@@ -514,6 +514,15 @@ async function cmdProviderAdd() {
       const validation = validateUrl(url);
       if (validation.valid) {
         url = url.replace(/\/$/, ''); // 移除末尾斜杠
+        // 自动补全 /v1 后缀
+        if (!url.endsWith('/v1') && !url.endsWith('/v1/')) {
+          // 检查是否已经有其他版本路径
+          const hasVersionPath = /\/v\d+\/?$/.test(url);
+          if (!hasVersionPath) {
+            console.log('✓ 自动补全 /v1 后缀');
+            url = url + '/v1';
+          }
+        }
         break;
       }
       console.log(`❌ ${validation.error}\n`);
