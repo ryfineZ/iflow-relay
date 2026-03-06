@@ -289,8 +289,8 @@ async function testProvider(url, key, fullModels = false) {
       return result;
     }
 
-    // 400 (模型不存在等) 说明连接成功、认证通过
-    if (testResponse.statusCode === 400) {
+    // 400/422 (模型不存在/参数错误) 说明连接成功、认证通过
+    if (testResponse.statusCode === 400 || testResponse.statusCode === 422) {
       result.success = true;
       result.warning = '模型列表端点不可用，但服务连接正常。请手动配置模型名称。';
 
