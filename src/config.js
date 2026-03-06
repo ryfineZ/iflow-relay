@@ -172,47 +172,14 @@ function getIFlowCLICredentials() {
 }
 
 /**
- * 更新 .env 文件中的 iFlow API Key
- */
-function updateEnvIFlowKey(newKey) {
-  const envPath = path.join(process.cwd(), '.env');
-  try {
-    let content = '';
-    if (fs.existsSync(envPath)) {
-      content = fs.readFileSync(envPath, 'utf-8');
-    }
-
-    const lines = content.split('\n');
-    let updated = false;
-    const newLines = lines.map(line => {
-      // 匹配 UPSTREAM_1_KEY=xxx（假设 UPSTREAM_1 是 iFlow）
-      if (line.startsWith('UPSTREAM_1_KEY=')) {
-        const oldKey = line.split('=')[1] || '';
-        if (oldKey !== newKey) {
-          console.log(`[config] Updating UPSTREAM_1_KEY in .env: ${oldKey.slice(0, 10)}... -> ${newKey.slice(0, 10)}...`);
-          updated = true;
-          return `UPSTREAM_1_KEY=${newKey}`;
-        }
-      }
-      return line;
-    });
-
-    if (updated) {
-      fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
-    }
-  } catch (err) {
-    console.warn(`[config] Failed to update .env: ${err.message}`);
-  }
-}
-
-/**
  * 自动添加 iFlow Provider 到 .env 文件
  * @param {Object} cliCreds - 从 ~/.iflow/settings.json 读取的凭证
+ * @param {number} providerNum - Provider 编号，默认自动查找
  */
-function autoAddIFlowProvider(cliCreds) {
+function autoAddIFlowProvider(cliCreds, providerNum = null) {
   if (!cliCreds.apiKey) {
     console.log('[config] No iFlow CLI credentials found, skipping auto-add');
-    return false;
+    return { success: false, reason: 'no-credentials' };
   }
 
   const envPath = path.join(process.cwd(), '.env');
@@ -220,61 +187,67 @@ function autoAddIFlowProvider(cliCreds) {
     let content = '';
     if (fs.existsSync(envPath)) {
       content = fs.readFileSync(envPath, 'utf-8');
+    }
+
+    // 查找下一个可用的 Provider 编号
+    let num = providerNum;
+    if (num === null) {
+      for (let i = 1; i <= 50; i++) {
+        if (!content.includes(`UPSTREAM_${i}_URL=`) && !content.includes(`UPSTREAM_${i}_KEY=`)) {
+          num = i;
+          break;
+        }
+      }
+    }
+
+    if (num === null) {
+      console.log('[config] No available Provider slot (max 50)');
+      return { success: false, reason: 'no-slot' };
+    }
+
+    // 检查是否已有 iFlow Provider
+    for (let i = 1; i <= 50; i++) {
+      const urlMatch = content.match(new RegExp(`^UPSTREAM_${i}_URL=(.+)$`, 'm'));
+      if (urlMatch) {
+        const url = urlMatch[1].trim();
+        if (isIFlowDomain(url)) {
+          console.log(`[config] iFlow Provider already exists at UPSTREAM_${i}`);
+          return { success: false, reason: 'already-exists', slot: i };
+        }
+      }
     }
 
     const now = new Date().toISOString().split('T')[0];
     const url = cliCreds.baseUrl || 'https://apis.iflow.cn/v1';
 
-    // 构建新的 Provider 配置
-    const newProvider = `\n# Provider 1: iFlow (auto-added ${now})
-UPSTREAM_1_URL=${url}
-UPSTREAM_1_KEY=${cliCreds.apiKey}
-UPSTREAM_1_SIGN=true
-UPSTREAM_1_NAME=iFlow
+    // 使用 auto 模式，动态读取 key
+    const newProvider = `\n# Provider ${num}: iFlow (added ${now})
+UPSTREAM_${num}_URL=${url}
+UPSTREAM_${num}_KEY=auto
+UPSTREAM_${num}_SIGN=true
+UPSTREAM_${num}_NAME=iFlow
 `;
-
-    // 检查是否已有 UPSTREAM_1 配置
-    if (content.includes('UPSTREAM_1_URL=') || content.includes('UPSTREAM_1_KEY=')) {
-      console.log('[config] UPSTREAM_1 already exists in .env, skipping auto-add');
-      return false;
-    }
 
     // 添加新 Provider
     const newContent = content.trimEnd() + newProvider;
     fs.writeFileSync(envPath, newContent, 'utf-8');
-    console.log(`[config] Auto-added iFlow provider to .env (${url})`);
-    return true;
+    console.log(`[config] Added iFlow provider to .env as UPSTREAM_${num} (${url})`);
+    return { success: true, slot: num, url };
   } catch (err) {
-    console.warn(`[config] Failed to auto-add iFlow provider: ${err.message}`);
-    return false;
+    console.warn(`[config] Failed to add iFlow provider: ${err.message}`);
+    return { success: false, reason: 'error', error: err.message };
   }
 }
 
 function load() {
-  // 尝试从 iFlow CLI 配置获取凭证
+  // 尝试从 iFlow CLI 配置获取凭证（用于 KEY=auto 模式）
   const cliCreds = getIFlowCLICredentials();
-
-  // 检查是否已配置 upstream
-  const hasUpstreams = !!getEnv('UPSTREAMS', '') || !!getEnv('UPSTREAM_1_KEY', '');
-
-  // 如果没有配置任何 upstream，且有 iFlow CLI 凭证，自动添加 iFlow Provider
-  if (!hasUpstreams && cliCreds.apiKey) {
-    console.log('[config] No upstream configured, auto-adding iFlow provider from CLI credentials...');
-    autoAddIFlowProvider(cliCreds);
-  }
-  // 如果已有 iFlow Provider（UPSTREAM_1 是 iFlow 域名），更新其 Key
-  else if (cliCreds.apiKey && hasUpstreams) {
-    const upstream1Url = getEnv('UPSTREAM_1_URL', '');
-    if (isIFlowDomain(upstream1Url)) {
-      updateEnvIFlowKey(cliCreds.apiKey);
-    }
-  }
 
   // API Key 获取优先级：
   // 1. IFLOW_API_KEYS 环境变量（多个 key）
   // 2. IFLOW_API_KEY 环境变量（单个 key）
   // 3. ~/.iflow/settings.json 或 ~/.iflow/oauth_creds.json（iFlow CLI 登录后的凭证）
-  // 4. .env 中的 UPSTREAM_1_KEY（已在上面的 updateEnvIFlowKey 更新）
+  // 4. .env 中的 UPSTREAM_X_KEY
   const apiKeys = (() => {
     const multi = getList('IFLOW_API_KEYS', []);
     if (multi.length > 0) return multi;
@@ -437,4 +410,4 @@ function load() {
   };
 }
 
-module.exports = { load };
+module.exports = { load, getIFlowCLICredentials, isIFlowDomain, autoAddIFlowProvider };

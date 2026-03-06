@@ -973,6 +973,102 @@ async function cmdProviderEnable() {
   }
 }
 
+async function cmdProviderAddIFlow() {
+  console.log('正在读取 iFlow CLI 凭证...\n');
+
+  // 从 ~/.iflow/settings.json 读取凭证
+  const settingsPath = path.join(os.homedir(), '.iflow', 'settings.json');
+  if (!fs.existsSync(settingsPath)) {
+    console.log('❌ 未找到 iFlow CLI 配置文件');
+    console.log('请先运行 `iflow login` 登录 iFlow CLI');
+    return;
+  }
+
+  let cliCreds;
+  try {
+    const content = fs.readFileSync(settingsPath, 'utf-8');
+    const settings = JSON.parse(content);
+    cliCreds = {
+      apiKey: settings.apiKey || null,
+      baseUrl: settings.baseUrl || 'https://apis.iflow.cn/v1',
+    };
+  } catch (err) {
+    console.log(`❌ 读取 iFlow CLI 配置失败: ${err.message}`);
+    return;
+  }
+
+  if (!cliCreds.apiKey) {
+    console.log('❌ iFlow CLI 配置中没有 API Key');
+    console.log('请先运行 `iflow login` 登录 iFlow CLI');
+    return;
+  }
+
+  console.log(`✅ 找到 iFlow CLI 凭证`);
+  console.log(`   API Key: ${cliCreds.apiKey.substring(0, 10)}...${cliCreds.apiKey.substring(cliCreds.apiKey.length - 4)}`);
+  console.log(`   Base URL: ${cliCreds.baseUrl}`);
+  console.log('');
+
+  // 检查是否已有 iFlow Provider
+  const envPath = path.join(process.cwd(), '.env');
+  if (fs.existsSync(envPath)) {
+    const content = fs.readFileSync(envPath, 'utf-8');
+    for (let i = 1; i <= 50; i++) {
+      const urlMatch = content.match(new RegExp(`^UPSTREAM_${i}_URL=(.+)$`, 'm'));
+      if (urlMatch) {
+        const url = urlMatch[1].trim();
+        if (isIFlowDomain(url)) {
+          console.log(`⚠️  已存在 iFlow Provider (UPSTREAM_${i})`);
+          console.log('如需重新添加，请先删除现有的 iFlow Provider');
+          return;
+        }
+      }
+    }
+  }
+
+  const rl = createReadline();
+  try {
+    const confirm = await questionYesNo(rl, '确认添加 iFlow Provider?');
+    if (!confirm) {
+      console.log('已取消');
+      return;
+    }
+
+    // 查找下一个可用的 Provider 编号
+    let num = 1;
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      for (let i = 1; i <= 50; i++) {
+        if (!content.includes(`UPSTREAM_${i}_URL=`)) {
+          num = i;
+          break;
+        }
+      }
+    }
+
+    const now = new Date().toISOString().split('T')[0];
+    const url = cliCreds.baseUrl.replace(/\/$/, '');
+
+    // 使用 auto 模式，动态读取 key
+    const newProvider = `\n# Provider ${num}: iFlow (added ${now})
+UPSTREAM_${num}_URL=${url}
+UPSTREAM_${num}_KEY=auto
+UPSTREAM_${num}_SIGN=true
+UPSTREAM_${num}_NAME=iFlow
+`;
+
+    let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+    envContent = envContent.trimEnd() + newProvider;
+    fs.writeFileSync(envPath, envContent, 'utf-8');
+
+    console.log(`\n✅ iFlow Provider 已添加 (UPSTREAM_${num})`);
+    console.log(`   URL: ${url}`);
+    console.log(`   Key: auto (动态读取自 ~/.iflow/settings.json)`);
+    console.log('\n重启 iflow-relay 使配置生效: npm start');
+  } finally {
+    rl.close();
+  }
+}
+
 async function cmdModel() {
   const config = loadConfig();
 
@@ -1255,6 +1351,7 @@ iflow-relay CLI - 管理 iflow-relay 代理
   model                       交互式选择默认模型
   provider list               列出已配置的 Provider
   provider add                交互式添加 Provider
+  provider add-iflow          从 iFlow CLI 添加 iFlow Provider
   provider remove             删除 Provider
   provider test               测试 Provider 连接
   provider name               设置 Provider 名称
@@ -1275,8 +1372,8 @@ iflow-relay CLI - 管理 iflow-relay 代理
 示例:
   iflow-relay models
   iflow-relay provider add
+  iflow-relay provider add-iflow
   iflow-relay config set DEFAULT_MODEL iFlow/qwen3-max
-  iflow-relay config set MM_EXTRACTOR_MODEL aliyun/qwen-vl-max
   iflow-relay config list
 `);
 }
@@ -1300,6 +1397,8 @@ async function main() {
         await cmdProviderList();
       } else if (subCmd === 'add') {
         await cmdProviderAdd();
+      } else if (subCmd === 'add-iflow') {
+        await cmdProviderAddIFlow();
       } else if (subCmd === 'remove' || subCmd === 'rm') {
         await cmdProviderRemove();
       } else if (subCmd === 'test') {
@@ -1311,7 +1410,7 @@ async function main() {
       } else if (subCmd === 'enable') {
         await cmdProviderEnable();
       } else {
-        console.log('用法: iflow-relay provider <list|add|remove|test|name|disable|enable>');
+        console.log('用法: iflow-relay provider <list|add|add-iflow|remove|test|name|disable|enable>');
       }
       break;
     case 'config':
