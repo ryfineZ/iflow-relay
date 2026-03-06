@@ -100,23 +100,6 @@ function loadConfig() {
     upstreams.push({ url, key, sign: isIFlow, name, models, enabled, index: i });
   }
 
-  // 从 ~/.iflow/settings.json 加载
-  const settingsPath = path.join(os.homedir(), '.iflow', 'settings.json');
-  let iflowKey = null;
-  let iflowUrl = 'https://apis.iflow.cn/v1';
-  try {
-    if (fs.existsSync(settingsPath)) {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      iflowKey = settings.apiKey || null;
-      iflowUrl = (settings.baseUrl || iflowUrl).replace(/\/$/, '');
-    }
-  } catch (_) {}
-
-  // 如果没有配置上游，使用 iFlow CLI 凭证
-  if (upstreams.length === 0 && iflowKey) {
-    upstreams.push({ url: iflowUrl, key: iflowKey, sign: true, name: 'iFlow' });
-  }
-
   return {
     port,
     upstreams,
