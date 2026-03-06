@@ -187,7 +187,15 @@ function pickUpstream(cfg, options = {}) {
   // 优先级2: 策略选择
   const strategy = runtimeStrategy || cfg.upstreamStrategy;
   if (strategy === 'roundrobin') return pickRoundRobin(cfg.upstreams);
+  if (strategy === 'priority') return pickPriority(cfg.upstreams);
   return pickFastest(cfg.upstreams);
+}
+
+function pickPriority(upstreams) {
+  // 只使用第一个启用的 upstream
+  const enabled = upstreams.filter(u => u.enabled !== false);
+  if (enabled.length === 0) return { upstream: null, idx: -1 };
+  return { upstream: enabled[0], idx: upstreams.indexOf(enabled[0]) };
 }
 
 function handleAdminStrategy(cfg, req, res) {
@@ -198,8 +206,8 @@ function handleAdminStrategy(cfg, req, res) {
     let obj;
     try { obj = JSON.parse(body); } catch (_) { writeError(res, 400, 'invalid JSON'); return; }
     const s = (obj.strategy || '').trim();
-    if (s !== 'fastest' && s !== 'roundrobin') {
-      writeError(res, 400, 'strategy must be "fastest" or "roundrobin"'); return;
+    if (s !== 'fastest' && s !== 'roundrobin' && s !== 'priority') {
+      writeError(res, 400, 'strategy must be "fastest", "roundrobin" or "priority"'); return;
     }
     runtimeStrategy = s;
     res.setHeader('Content-Type', 'application/json');

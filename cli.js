@@ -1259,6 +1259,78 @@ async function cmdModel() {
   }
 }
 
+async function cmdStrategy() {
+  const envPath = ENV_FILE;
+
+  // 读取当前策略
+  let currentStrategy = 'fastest';
+  if (fs.existsSync(envPath)) {
+    const content = fs.readFileSync(envPath, 'utf-8');
+    const match = content.match(/^UPSTREAM_STRATEGY=(.+)$/m);
+    if (match) {
+      currentStrategy = match[1].trim();
+    }
+  }
+
+  console.log('调度策略设置\n');
+  console.log('当前策略:', currentStrategy);
+  console.log('');
+  console.log('可选策略:');
+  console.log('  1. fastest     自动选择响应最快的 Provider（推荐）');
+  console.log('  2. roundrobin  轮询，依次使用每个 Provider');
+  console.log('  3. priority    只使用第一个启用的 Provider');
+  console.log('');
+
+  const rl = createReadline();
+  try {
+    const choice = await question(rl, '请选择策略 (1-3)', currentStrategy === 'fastest' ? '1' : currentStrategy === 'roundrobin' ? '2' : '3');
+
+    let strategy;
+    switch (choice) {
+      case '1':
+        strategy = 'fastest';
+        break;
+      case '2':
+        strategy = 'roundrobin';
+        break;
+      case '3':
+        strategy = 'priority';
+        break;
+      default:
+        console.log('❌ 无效选择');
+        return;
+    }
+
+    // 更新 .env
+    let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+    const lines = content.split('\n');
+    let found = false;
+    const newLines = lines.map(line => {
+      if (line.startsWith('UPSTREAM_STRATEGY=')) {
+        found = true;
+        return `UPSTREAM_STRATEGY=${strategy}`;
+      }
+      return line;
+    });
+
+    if (!found) {
+      // 找到合适的位置插入
+      const portIdx = newLines.findIndex(l => l.startsWith('PORT='));
+      if (portIdx >= 0) {
+        newLines.splice(portIdx + 1, 0, `UPSTREAM_STRATEGY=${strategy}`);
+      } else {
+        newLines.push(`UPSTREAM_STRATEGY=${strategy}`);
+      }
+    }
+
+    fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
+    console.log(`\n✅ 调度策略已设置为: ${strategy}`);
+    console.log('重启 aigw 使配置生效: npm start');
+  } finally {
+    rl.close();
+  }
+}
+
 async function cmdHealth() {
   const config = loadConfig();
   const baseUrl = `http://localhost:${config.port}`;
@@ -1416,6 +1488,7 @@ aigw CLI - 管理 aigw 代理
 命令:
   models                      列出所有可用模型（含来源和别名）
   model                       交互式选择默认模型
+  strategy                    设置调度策略（fastest/roundrobin/priority）
   provider list               列出已配置的 Provider
   provider add                交互式添加 Provider
   provider add-iflow          从 iFlow CLI 添加 iFlow Provider
@@ -1430,18 +1503,25 @@ aigw CLI - 管理 aigw 代理
   config list                 列出所有配置
   health                      检查服务状态
 
+调度策略:
+  fastest     自动选择响应最快的 Provider（默认）
+  roundrobin  轮询，依次使用每个 Provider
+  priority    只使用第一个启用的 Provider
+
 模型别名格式:
   provider/model    例如: iFlow/qwen3-max
 
 常用配置:
   DEFAULT_MODEL        默认模型
   MM_EXTRACTOR_MODEL   视觉提取模型
+  UPSTREAM_STRATEGY    调度策略
 
 示例:
   aigw models
+  aigw model                          # 交互式选择默认模型
+  aigw strategy                       # 交互式选择调度策略
   aigw provider add
   aigw provider add-iflow
-  aigw provider clear
   aigw config set DEFAULT_MODEL iFlow/qwen3-max
 `);
 }
@@ -1459,6 +1539,9 @@ async function main() {
       break;
     case 'model':
       await cmdModel();
+      break;
+    case 'strategy':
+      await cmdStrategy();
       break;
     case 'provider':
       if (subCmd === 'list') {
