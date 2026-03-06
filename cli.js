@@ -1262,30 +1262,50 @@ async function cmdModel() {
 async function cmdStrategy() {
   const envPath = ENV_FILE;
 
-  // 读取当前策略
+  // 读取当前配置
   let currentStrategy = 'fastest';
+  let defaultModel = 'glm-5';
+  let defaultProvider = '';
+
   if (fs.existsSync(envPath)) {
     const content = fs.readFileSync(envPath, 'utf-8');
-    const match = content.match(/^UPSTREAM_STRATEGY=(.+)$/m);
-    if (match) {
-      currentStrategy = match[1].trim();
+    const strategyMatch = content.match(/^UPSTREAM_STRATEGY=(.+)$/m);
+    if (strategyMatch) {
+      currentStrategy = strategyMatch[1].trim();
+    }
+    const modelMatch = content.match(/^DEFAULT_MODEL=(.+)$/m);
+    if (modelMatch) {
+      defaultModel = modelMatch[1].trim();
+    }
+    const providerMatch = content.match(/^DEFAULT_MODEL_PROVIDER=(.+)$/m);
+    if (providerMatch) {
+      defaultProvider = providerMatch[1].trim();
     }
   }
 
+  // 解析当前模型显示
+  const currentModelDisplay = currentStrategy === 'fixed' && defaultProvider
+    ? `${defaultProvider}/${defaultModel}`
+    : defaultModel;
+
   console.log('调度策略设置\n');
-  console.log('当前策略:', currentStrategy);
+  console.log(`当前策略: ${currentStrategy}`);
+  console.log(`默认模型: ${currentModelDisplay}`);
   console.log('');
   console.log('可选策略:');
-  console.log('  1. fastest     自动选择响应最快的 Provider（推荐）');
-  console.log('  2. roundrobin  轮询，依次使用每个 Provider');
-  console.log('  3. priority    只使用第一个启用的 Provider');
+  console.log('  1. fastest     自动选择响应最快的 Provider');
+  console.log('  2. roundrobin  轮询所有有该模型的 Provider');
+  console.log('  3. fixed       固定使用指定 Provider');
   console.log('');
 
   const rl = createReadline();
   try {
-    const choice = await question(rl, '请选择策略 (1-3)', currentStrategy === 'fastest' ? '1' : currentStrategy === 'roundrobin' ? '2' : '3');
+    const choice = await question(rl, '请选择策略 (1-3)',
+      currentStrategy === 'fastest' ? '1' : currentStrategy === 'roundrobin' ? '2' : '3');
 
     let strategy;
+    let provider = defaultProvider;
+
     switch (choice) {
       case '1':
         strategy = 'fastest';
@@ -1294,7 +1314,14 @@ async function cmdStrategy() {
         strategy = 'roundrobin';
         break;
       case '3':
-        strategy = 'priority';
+        strategy = 'fixed';
+        // 询问 Provider
+        const providerInput = await question(rl, '请输入 Provider 名称', defaultProvider);
+        provider = providerInput.trim();
+        if (!provider) {
+          console.log('❌ fixed 策略需要指定 Provider');
+          return;
+        }
         break;
       default:
         console.log('❌ 无效选择');
@@ -1304,17 +1331,21 @@ async function cmdStrategy() {
     // 更新 .env
     let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
     const lines = content.split('\n');
-    let found = false;
+    let foundStrategy = false;
+    let foundProvider = false;
     const newLines = lines.map(line => {
       if (line.startsWith('UPSTREAM_STRATEGY=')) {
-        found = true;
+        foundStrategy = true;
         return `UPSTREAM_STRATEGY=${strategy}`;
+      }
+      if (line.startsWith('DEFAULT_MODEL_PROVIDER=')) {
+        foundProvider = true;
+        return `DEFAULT_MODEL_PROVIDER=${provider}`;
       }
       return line;
     });
 
-    if (!found) {
-      // 找到合适的位置插入
+    if (!foundStrategy) {
       const portIdx = newLines.findIndex(l => l.startsWith('PORT='));
       if (portIdx >= 0) {
         newLines.splice(portIdx + 1, 0, `UPSTREAM_STRATEGY=${strategy}`);
@@ -1323,8 +1354,24 @@ async function cmdStrategy() {
       }
     }
 
+    // fixed 策略时写入 DEFAULT_MODEL_PROVIDER
+    if (strategy === 'fixed') {
+      if (!foundProvider) {
+        newLines.push(`DEFAULT_MODEL_PROVIDER=${provider}`);
+      }
+    } else {
+      // 非 fixed 策略时删除 DEFAULT_MODEL_PROVIDER
+      const providerIdx = newLines.findIndex(l => l.startsWith('DEFAULT_MODEL_PROVIDER='));
+      if (providerIdx >= 0) {
+        newLines.splice(providerIdx, 1);
+      }
+    }
+
     fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
+
+    const displayModel = strategy === 'fixed' ? `${provider}/${defaultModel}` : defaultModel;
     console.log(`\n✅ 调度策略已设置为: ${strategy}`);
+    console.log(`   默认模型: ${displayModel}`);
     console.log('重启 aigw 使配置生效: npm start');
   } finally {
     rl.close();
@@ -1488,7 +1535,7 @@ aigw CLI - 管理 aigw 代理
 命令:
   models                      列出所有可用模型（含来源和别名）
   model                       交互式选择默认模型
-  strategy                    设置调度策略（fastest/roundrobin/priority）
+  strategy                    设置调度策略
   provider list               列出已配置的 Provider
   provider add                交互式添加 Provider
   provider add-iflow          从 iFlow CLI 添加 iFlow Provider
@@ -1504,17 +1551,18 @@ aigw CLI - 管理 aigw 代理
   health                      检查服务状态
 
 调度策略:
-  fastest     自动选择响应最快的 Provider（默认）
-  roundrobin  轮询，依次使用每个 Provider
-  priority    只使用第一个启用的 Provider
+  fastest     相同模型自动选最快的 Provider（默认）
+  roundrobin  轮询所有有该模型的 Provider
+  fixed       固定使用指定的 Provider（需设置 DEFAULT_MODEL_PROVIDER）
 
 模型别名格式:
   provider/model    例如: iFlow/qwen3-max
 
 常用配置:
-  DEFAULT_MODEL        默认模型
-  MM_EXTRACTOR_MODEL   视觉提取模型
-  UPSTREAM_STRATEGY    调度策略
+  DEFAULT_MODEL           默认模型
+  DEFAULT_MODEL_PROVIDER  fixed 策略下的默认 Provider
+  MM_EXTRACTOR_MODEL      视觉提取模型
+  UPSTREAM_STRATEGY       调度策略
 
 示例:
   aigw models

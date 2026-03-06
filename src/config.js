@@ -378,7 +378,8 @@ function load() {
 
   return {
     port: getInt('PORT', 8327),
-    upstreamStrategy: getEnv('UPSTREAM_STRATEGY', 'fastest'), // 'fastest' | 'roundrobin'
+    upstreamStrategy: getEnv('UPSTREAM_STRATEGY', 'fastest'), // 'fastest' | 'roundrobin' | 'fixed'
+    defaultModelProvider: getEnv('DEFAULT_MODEL_PROVIDER', ''), // for fixed strategy
     baseURL,
     apiKeys,
     upstreams,

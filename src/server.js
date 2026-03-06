@@ -177,18 +177,40 @@ function parseModelWithProvider(modelName, upstreams) {
 }
 
 function pickUpstream(cfg, options = {}) {
-  const { specifiedUpstream, specifiedIdx } = options;
+  const { specifiedUpstream, specifiedIdx, model } = options;
 
-  // 优先级1: 模型名称指定了 provider
+  // 优先级1: 模型名称指定了 provider (如 iFlow/glm-5)
   if (specifiedUpstream) {
     return { upstream: specifiedUpstream, idx: specifiedIdx };
   }
 
   // 优先级2: 策略选择
   const strategy = runtimeStrategy || cfg.upstreamStrategy;
+
+  // fixed 策略：使用指定的 provider
+  if (strategy === 'fixed') {
+    return pickFixed(cfg.upstreams, cfg.defaultModelProvider, model);
+  }
+
   if (strategy === 'roundrobin') return pickRoundRobin(cfg.upstreams);
-  if (strategy === 'priority') return pickPriority(cfg.upstreams);
   return pickFastest(cfg.upstreams);
+}
+
+function pickFixed(upstreams, defaultProvider, model) {
+  // 找到指定 provider 的 upstream
+  if (defaultProvider) {
+    const idx = upstreams.findIndex(u =>
+      u.name.toLowerCase() === defaultProvider.toLowerCase() && u.enabled !== false
+    );
+    if (idx >= 0) {
+      return { upstream: upstreams[idx], idx };
+    }
+  }
+
+  // 没有指定 provider 或找不到，使用第一个启用的
+  const enabled = upstreams.filter(u => u.enabled !== false);
+  if (enabled.length === 0) return { upstream: null, idx: -1 };
+  return { upstream: enabled[0], idx: upstreams.indexOf(enabled[0]) };
 }
 
 function pickPriority(upstreams) {
@@ -206,8 +228,8 @@ function handleAdminStrategy(cfg, req, res) {
     let obj;
     try { obj = JSON.parse(body); } catch (_) { writeError(res, 400, 'invalid JSON'); return; }
     const s = (obj.strategy || '').trim();
-    if (s !== 'fastest' && s !== 'roundrobin' && s !== 'priority') {
-      writeError(res, 400, 'strategy must be "fastest", "roundrobin" or "priority"'); return;
+    if (s !== 'fastest' && s !== 'roundrobin' && s !== 'fixed') {
+      writeError(res, 400, 'strategy must be "fastest", "roundrobin" or "fixed"'); return;
     }
     runtimeStrategy = s;
     res.setHeader('Content-Type', 'application/json');
@@ -881,10 +903,11 @@ async function handleOpenAICompletions(cfg, req, res) {
   }
 
   // 以下是原来的 HTTP 模式
-  // 【修改】传入指定的 upstream
+  // 【修改】传入指定的 upstream 和 model
   const { upstream, idx } = pickUpstream(cfg, {
     specifiedUpstream,
-    specifiedIdx
+    specifiedIdx,
+    model
   });
   const endpoint = upstream.url + '/chat/completions';
   const { sessionID, conversationID } = requestIDs(bodyObj);
@@ -1134,10 +1157,11 @@ async function handleAnthropicMessages(cfg, req, res) {
     openAIBody.model = model;
   }
 
-  // 【修改】传入指定的 upstream
+  // 【修改】传入指定的 upstream 和 model
   const { upstream, idx } = pickUpstream(cfg, {
     specifiedUpstream,
-    specifiedIdx
+    specifiedIdx,
+    model
   });
   const endpoint = upstream.url + '/chat/completions';
   const { sessionID, conversationID } = requestIDs(openAIBody);
