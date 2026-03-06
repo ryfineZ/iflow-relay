@@ -4,8 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// 配置文件路径：固定为 ~/.iflow-relay/.env
-const ENV_FILE = path.join(os.homedir(), '.iflow-relay', '.env');
+// 配置文件路径：固定为 ~/.aigw/.env
+const ENV_FILE = path.join(os.homedir(), '.aigw', '.env');
 
 function getEnv(key, defaultValue) {
   const v = process.env[key];

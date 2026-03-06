@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-OUTPUT="iflow-relay"
+OUTPUT="aigw"
 BUNDLE=".sea-bundle.js"
 BLOB=".sea-prep.blob"
 CONFIG=".sea-config.json"
@@ -23,7 +23,7 @@ EOF
 node --experimental-sea-config "$CONFIG"
 
 echo "==> 3/5 复制 node 二进制..."
-TMP_BIN="/tmp/iflow-relay-sea-$$"
+TMP_BIN="/tmp/aigw-sea-$$"
 cp "$(which node)" "$TMP_BIN"
 chmod +x "$TMP_BIN"
 codesign --remove-signature "$TMP_BIN" 2>/dev/null || true

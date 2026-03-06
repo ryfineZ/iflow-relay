@@ -1,11 +1,11 @@
 'use strict';
 
-// Load .env from ~/.iflow-relay/.env
+// Load .env from ~/.aigw/.env
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const ENV_FILE = path.join(os.homedir(), '.iflow-relay', '.env');
+const ENV_FILE = path.join(os.homedir(), '.aigw', '.env');
 
 // 确保配置目录存在
 const ENV_DIR = path.dirname(ENV_FILE);
@@ -35,7 +35,7 @@ const handler = createHandler(cfg);
 const server = http.createServer(handler);
 
 server.listen(cfg.port, () => {
-  console.log(`iflow-relay started on :${cfg.port}`);
+  console.log(`aigw started on :${cfg.port}`);
   console.log(`upstreams=${cfg.upstreams.length} models=${cfg.models.join(',')}`);
 });
 

@@ -1,5 +1,5 @@
 .env
-iflow-relay
+aigw
 *.log
 .DS_Store
 .env.bak

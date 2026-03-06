@@ -683,7 +683,7 @@ function handleModels(cfg, req, res) {
   if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
   const data = cfg.models
     .map(m => m.trim()).filter(Boolean)
-    .map(m => ({ id: m, object: 'model', created: 0, owned_by: 'iflow-relay' }));
+    .map(m => ({ id: m, object: 'model', created: 0, owned_by: 'aigw' }));
   res.setHeader('Content-Type', 'application/json');
   res.writeHead(200);
   res.end(JSON.stringify({ object: 'list', data }));
@@ -823,7 +823,7 @@ function handleModelByID(cfg, req, res, id) {
   if (!found) { writeError(res, 404, 'model not found'); return; }
   res.setHeader('Content-Type', 'application/json');
   res.writeHead(200);
-  res.end(JSON.stringify({ id: found.trim(), object: 'model', created: 0, owned_by: 'iflow-relay' }));
+  res.end(JSON.stringify({ id: found.trim(), object: 'model', created: 0, owned_by: 'aigw' }));
 }
 
 async function handleOpenAICompletions(cfg, req, res) {

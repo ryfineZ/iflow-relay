@@ -8,8 +8,8 @@ const path = require('path');
 const os = require('os');
 const readline = require('readline');
 
-// 配置文件路径：固定为 ~/.iflow-relay/.env
-const ENV_FILE = path.join(os.homedir(), '.iflow-relay', '.env');
+// 配置文件路径：固定为 ~/.aigw/.env
+const ENV_FILE = path.join(os.homedir(), '.aigw', '.env');
 
 // 确保配置目录存在
 const ENV_DIR = path.dirname(ENV_FILE);
@@ -454,7 +454,7 @@ async function cmdModels() {
 
   if (config.upstreams.length === 0) {
     console.log('❌ 没有配置任何 Provider');
-    console.log('运行 `iflow-relay provider add` 添加 Provider');
+    console.log('运行 `aigw provider add` 添加 Provider');
     return;
   }
 
@@ -476,7 +476,7 @@ async function cmdModels() {
               console.log(`    ${i + 1}. ${model}  (${upstream.name}/${model})`);
             });
           } else {
-            console.log(`  提示: 使用 iflow-relay provider models 命令配置模型列表`);
+            console.log(`  提示: 使用 aigw provider models 命令配置模型列表`);
           }
         } else {
           console.log(`  ✅ 连接成功 (${result.latency}ms, ${result.modelCount} 个模型)\n`);
@@ -535,7 +535,7 @@ async function cmdProviderList() {
 
   if (allProviders.length === 0) {
     console.log('❌ 没有配置任何 Provider');
-    console.log('运行 `iflow-relay provider add` 添加 Provider');
+    console.log('运行 `aigw provider add` 添加 Provider');
     return;
   }
 
@@ -646,7 +646,7 @@ async function cmdProviderAdd() {
           console.log(`   模型列表: ${models.join(', ')}`);
           console.log(`   默认模型: ${models[0]}`);
         }
-        console.log('重启 iflow-relay 使配置生效: npm start');
+        console.log('重启 aigw 使配置生效: npm start');
       } else {
         console.log('\n已取消保存');
       }
@@ -677,7 +677,7 @@ async function cmdProviderAdd() {
 
           const { num, name } = addProviderToEnv(url, key, isIFlow, providerName);
           console.log(`\n✅ Provider ${num} (${name}) 已保存到 .env (未验证)`);
-          console.log('重启 iflow-relay 使配置生效: npm start');
+          console.log('重启 aigw 使配置生效: npm start');
           break;
         } else if (choice === '3') {
           console.log('\n已取消');
@@ -735,7 +735,7 @@ async function cmdProviderRemove() {
             if (envUrl === upstream.url) {
               removeProviderFromEnv(i);
               console.log(`\n✅ Provider ${num} (${upstream.name}) 已删除`);
-              console.log('重启 iflow-relay 使配置生效: npm start');
+              console.log('重启 aigw 使配置生效: npm start');
               return;
             }
           }
@@ -826,7 +826,7 @@ async function cmdProviderName() {
   const config = loadConfig();
   if (config.upstreams.length === 0) {
     console.log('❌ 没有配置任何 Provider');
-    console.log('运行 `iflow-relay provider add` 添加 Provider');
+    console.log('运行 `aigw provider add` 添加 Provider');
     return;
   }
 
@@ -855,7 +855,7 @@ async function cmdProviderName() {
     const idx = config.upstreams[num - 1].index;
     updateEnvLine(`UPSTREAM_${idx}_NAME`, newName.trim());
     console.log(`\n✅ Provider ${num} 名称已设置为: ${newName.trim()}`);
-    console.log('重启 iflow-relay 使配置生效: npm start');
+    console.log('重启 aigw 使配置生效: npm start');
   } finally {
     rl.close();
   }
@@ -865,7 +865,7 @@ async function cmdProviderDisable() {
   const config = loadConfig();
   if (config.upstreams.length === 0) {
     console.log('❌ 没有配置任何 Provider');
-    console.log('运行 `iflow-relay provider add` 添加 Provider');
+    console.log('运行 `aigw provider add` 添加 Provider');
     return;
   }
 
@@ -895,7 +895,7 @@ async function cmdProviderDisable() {
       const idx = upstream.index;
       updateEnvLine(`UPSTREAM_${idx}_ENABLED`, 'false');
       console.log(`\n✅ Provider ${num} (${upstream.name}) 已停用`);
-      console.log('重启 iflow-relay 使配置生效: npm start');
+      console.log('重启 aigw 使配置生效: npm start');
     } else {
       console.log('已取消');
     }
@@ -908,7 +908,7 @@ async function cmdProviderEnable() {
   const config = loadConfig();
   if (config.upstreams.length === 0) {
     console.log('❌ 没有配置任何 Provider');
-    console.log('运行 `iflow-relay provider add` 添加 Provider');
+    console.log('运行 `aigw provider add` 添加 Provider');
     return;
   }
 
@@ -958,7 +958,7 @@ async function cmdProviderEnable() {
     const provider = disabled[num - 1];
     updateEnvLine(`UPSTREAM_${provider.index}_ENABLED`, 'true');
     console.log(`\n✅ Provider (${provider.name}) 已启用`);
-    console.log('重启 iflow-relay 使配置生效: npm start');
+    console.log('重启 aigw 使配置生效: npm start');
   } finally {
     rl.close();
   }
@@ -1054,7 +1054,7 @@ UPSTREAM_${num}_NAME=iFlow
     console.log(`\n✅ iFlow Provider 已添加 (UPSTREAM_${num})`);
     console.log(`   URL: ${url}`);
     console.log(`   Key: auto (动态读取自 ~/.iflow/settings.json)`);
-    console.log('\n重启 iflow-relay 使配置生效: npm start');
+    console.log('\n重启 aigw 使配置生效: npm start');
   } finally {
     rl.close();
   }
@@ -1126,7 +1126,7 @@ async function cmdProviderClear() {
     fs.writeFileSync(envPath, result, 'utf-8');
 
     console.log(`\n✅ 已清空 ${allProviders.length} 个 Provider`);
-    console.log('重启 iflow-relay 使配置生效: npm start');
+    console.log('重启 aigw 使配置生效: npm start');
   } finally {
     rl.close();
   }
@@ -1141,7 +1141,7 @@ async function cmdModel() {
 
   if (config.upstreams.length === 0) {
     console.log('\n❌ 没有配置任何 Provider');
-    console.log('运行 `iflow-relay provider add` 添加 Provider');
+    console.log('运行 `aigw provider add` 添加 Provider');
     return;
   }
 
@@ -1247,7 +1247,7 @@ async function cmdModel() {
         fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
 
         console.log(`\n✅ 默认模型已设置为: ${model.id}`);
-        console.log('重启 iflow-relay 使配置生效: npm start');
+        console.log('重启 aigw 使配置生效: npm start');
       }
     }
   } finally {
@@ -1275,7 +1275,7 @@ async function cmdHealth() {
       console.log('\nACP 状态: 服务未运行');
     }
   } catch (_) {
-    console.log('❌ 无法连接到 iflow-relay');
+    console.log('❌ 无法连接到 aigw');
     console.log(`确保服务正在运行: npm start`);
   }
 }
@@ -1289,7 +1289,7 @@ async function cmdConfig() {
   if (subCmd === 'get') {
     // 获取配置
     if (!key) {
-      console.log('用法: iflow-relay config get <KEY>');
+      console.log('用法: aigw config get <KEY>');
       console.log('\n常用配置:');
       console.log('  DEFAULT_MODEL        默认模型');
       console.log('  MM_EXTRACTOR_MODEL   视觉提取模型');
@@ -1321,10 +1321,10 @@ async function cmdConfig() {
   if (subCmd === 'set') {
     // 设置配置
     if (!key || value === undefined) {
-      console.log('用法: iflow-relay config set <KEY> <VALUE>');
+      console.log('用法: aigw config set <KEY> <VALUE>');
       console.log('\n示例:');
-      console.log('  iflow-relay config set DEFAULT_MODEL qwen-max');
-      console.log('  iflow-relay config set MM_EXTRACTOR_MODEL iFlow/qwen3-vl-plus');
+      console.log('  aigw config set DEFAULT_MODEL qwen-max');
+      console.log('  aigw config set MM_EXTRACTOR_MODEL iFlow/qwen3-vl-plus');
       return;
     }
 
@@ -1353,7 +1353,7 @@ async function cmdConfig() {
 
     fs.writeFileSync(envPath, newLines.join('\n'), 'utf-8');
     console.log(`✅ 已设置 ${key}=${value}`);
-    console.log('重启 iflow-relay 使配置生效: npm start');
+    console.log('重启 aigw 使配置生效: npm start');
     return;
   }
 
@@ -1379,7 +1379,7 @@ async function cmdConfig() {
   }
 
   // 默认显示帮助
-  console.log(`用法: iflow-relay config <command>
+  console.log(`用法: aigw config <command>
 
 命令:
   get <KEY>     获取配置值
@@ -1393,10 +1393,10 @@ async function cmdConfig() {
   UPSTREAM_STRATEGY    上游选择策略 (fastest/roundrobin)
 
 示例:
-  iflow-relay config get DEFAULT_MODEL
-  iflow-relay config set DEFAULT_MODEL iFlow/qwen3-max
-  iflow-relay config set MM_EXTRACTOR_MODEL aliyun/qwen-vl-max
-  iflow-relay config list
+  aigw config get DEFAULT_MODEL
+  aigw config set DEFAULT_MODEL iFlow/qwen3-max
+  aigw config set MM_EXTRACTOR_MODEL aliyun/qwen-vl-max
+  aigw config list
 `);
 }
 
@@ -1404,10 +1404,10 @@ async function cmdConfig() {
 
 function printHelp() {
   console.log(`
-iflow-relay CLI - 管理 iflow-relay 代理
+aigw CLI - 管理 aigw 代理
 
 用法:
-  iflow-relay <command> [args]
+  aigw <command> [args]
 
 命令:
   models                      列出所有可用模型（含来源和别名）
@@ -1434,11 +1434,11 @@ iflow-relay CLI - 管理 iflow-relay 代理
   MM_EXTRACTOR_MODEL   视觉提取模型
 
 示例:
-  iflow-relay models
-  iflow-relay provider add
-  iflow-relay provider add-iflow
-  iflow-relay provider clear
-  iflow-relay config set DEFAULT_MODEL iFlow/qwen3-max
+  aigw models
+  aigw provider add
+  aigw provider add-iflow
+  aigw provider clear
+  aigw config set DEFAULT_MODEL iFlow/qwen3-max
 `);
 }
 
@@ -1476,7 +1476,7 @@ async function main() {
       } else if (subCmd === 'enable') {
         await cmdProviderEnable();
       } else {
-        console.log('用法: iflow-relay provider <list|add|add-iflow|remove|clear|test|name|disable|enable>');
+        console.log('用法: aigw provider <list|add|add-iflow|remove|clear|test|name|disable|enable>');
       }
       break;
     case 'config':
