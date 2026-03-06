@@ -4,6 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// 配置文件路径：固定为 ~/.iflow-relay/.env
+const ENV_FILE = path.join(os.homedir(), '.iflow-relay', '.env');
+
 function getEnv(key, defaultValue) {
   const v = process.env[key];
   return v !== undefined && v !== '' ? v : defaultValue;
@@ -182,8 +185,15 @@ function autoAddIFlowProvider(cliCreds, providerNum = null) {
     return { success: false, reason: 'no-credentials' };
   }
 
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = ENV_FILE;
+  const envDir = path.dirname(envPath);
+
   try {
+    // 确保配置目录存在
+    if (!fs.existsSync(envDir)) {
+      fs.mkdirSync(envDir, { recursive: true });
+    }
+
     let content = '';
     if (fs.existsSync(envPath)) {
       content = fs.readFileSync(envPath, 'utf-8');

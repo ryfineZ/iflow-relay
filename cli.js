@@ -8,10 +8,18 @@ const path = require('path');
 const os = require('os');
 const readline = require('readline');
 
+// 配置文件路径：固定为 ~/.iflow-relay/.env
+const ENV_FILE = path.join(os.homedir(), '.iflow-relay', '.env');
+
+// 确保配置目录存在
+const ENV_DIR = path.dirname(ENV_FILE);
+if (!fs.existsSync(ENV_DIR)) {
+  fs.mkdirSync(ENV_DIR, { recursive: true });
+}
+
 // 加载 .env 文件
-const envPath = path.join(process.cwd(), '.env');
-if (fs.existsSync(envPath)) {
-  const content = fs.readFileSync(envPath, 'utf-8');
+if (fs.existsSync(ENV_FILE)) {
+  const content = fs.readFileSync(ENV_FILE, 'utf-8');
   content.split('\n').forEach(line => {
     const trimmed = line.trim();
     if (trimmed && !trimmed.startsWith('#')) {
@@ -336,7 +344,7 @@ async function testProvider(url, key, fullModels = false) {
 // ─── Provider 管理 ────────────────────────────────────────────────────────────
 
 function getNextProviderNum() {
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = ENV_FILE;
   let content = '';
   if (fs.existsSync(envPath)) {
     content = fs.readFileSync(envPath, 'utf-8');
@@ -360,7 +368,7 @@ function getNextProviderNum() {
  * @param {string} value - 配置值
  */
 function updateEnvLine(key, value) {
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = ENV_FILE;
   let content = '';
   if (fs.existsSync(envPath)) {
     content = fs.readFileSync(envPath, 'utf-8');
@@ -384,7 +392,7 @@ function updateEnvLine(key, value) {
 }
 
 function addProviderToEnv(url, key, sign, name, models = null) {
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = ENV_FILE;
   let content = '';
   if (fs.existsSync(envPath)) {
     content = fs.readFileSync(envPath, 'utf-8');
@@ -416,7 +424,7 @@ function addProviderToEnv(url, key, sign, name, models = null) {
 }
 
 function removeProviderFromEnv(num) {
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = ENV_FILE;
   if (!fs.existsSync(envPath)) return false;
 
   const content = fs.readFileSync(envPath, 'utf-8');
@@ -522,7 +530,7 @@ async function cmdModels() {
 async function cmdProviderList() {
   // 读取所有 Provider（包括停用的）
   const allProviders = [];
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = ENV_FILE;
   if (fs.existsSync(envPath)) {
     const content = fs.readFileSync(envPath, 'utf-8');
     for (let i = 1; i <= 50; i++) {
@@ -731,7 +739,7 @@ async function cmdProviderRemove() {
 
     if (confirm) {
       // 需要找到实际的 UPSTREAM_X 编号
-      const envPath = path.join(process.cwd(), '.env');
+      const envPath = ENV_FILE;
       if (fs.existsSync(envPath)) {
         const content = fs.readFileSync(envPath, 'utf-8');
         const lines = content.split('\n');
@@ -923,7 +931,7 @@ async function cmdProviderEnable() {
 
   // 找出所有 Provider（包括停用的）
   const allProviders = [];
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = ENV_FILE;
   if (fs.existsSync(envPath)) {
     const content = fs.readFileSync(envPath, 'utf-8');
     for (let i = 1; i <= 50; i++) {
@@ -1009,7 +1017,7 @@ async function cmdProviderAddIFlow() {
   console.log('');
 
   // 检查是否已有 iFlow Provider
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = ENV_FILE;
   if (fs.existsSync(envPath)) {
     const content = fs.readFileSync(envPath, 'utf-8');
     for (let i = 1; i <= 50; i++) {
@@ -1072,7 +1080,7 @@ UPSTREAM_${num}_NAME=iFlow
 async function cmdProviderClear() {
   // 读取所有 Provider
   const allProviders = [];
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = ENV_FILE;
   if (fs.existsSync(envPath)) {
     const content = fs.readFileSync(envPath, 'utf-8');
     for (let i = 1; i <= 50; i++) {
@@ -1232,7 +1240,7 @@ async function cmdModel() {
 
       if (confirm) {
         // 更新 .env
-        const envPath = path.join(process.cwd(), '.env');
+        const envPath = ENV_FILE;
         let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
 
         const lines = content.split('\n');
@@ -1311,7 +1319,7 @@ async function cmdConfig() {
       console.log(`${key}=${value}`);
     } else {
       // 尝试从 .env 读取
-      const envPath = path.join(process.cwd(), '.env');
+      const envPath = ENV_FILE;
       if (fs.existsSync(envPath)) {
         const content = fs.readFileSync(envPath, 'utf-8');
         const lines = content.split('\n');
@@ -1337,7 +1345,7 @@ async function cmdConfig() {
       return;
     }
 
-    const envPath = path.join(process.cwd(), '.env');
+    const envPath = ENV_FILE;
     let content = '';
     if (fs.existsSync(envPath)) {
       content = fs.readFileSync(envPath, 'utf-8');
@@ -1368,7 +1376,7 @@ async function cmdConfig() {
 
   if (subCmd === 'list') {
     // 列出所有配置
-    const envPath = path.join(process.cwd(), '.env');
+    const envPath = ENV_FILE;
     if (!fs.existsSync(envPath)) {
       console.log('❌ .env 文件不存在');
       return;

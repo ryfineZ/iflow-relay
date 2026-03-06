@@ -1,17 +1,20 @@
 'use strict';
 
-// Load .env if present (optional, no external deps)
+// Load .env from ~/.iflow-relay/.env
 const fs = require('fs');
 const path = require('path');
-// 按优先级查找 .env：当前目录 → 可执行文件所在目录 → ~/.iflow-relay
-const _envCandidates = [
-  path.join(process.cwd(), '.env'),
-  path.join(path.dirname(process.execPath), '.env'),
-  path.join(require('os').homedir(), '.iflow-relay', '.env'),
-];
-const envFile = _envCandidates.find(f => { try { return require('fs').existsSync(f); } catch(_){return false;} });
-if (fs.existsSync(envFile)) {
-  const lines = fs.readFileSync(envFile, 'utf8').split('\n');
+const os = require('os');
+
+const ENV_FILE = path.join(os.homedir(), '.iflow-relay', '.env');
+
+// 确保配置目录存在
+const ENV_DIR = path.dirname(ENV_FILE);
+if (!fs.existsSync(ENV_DIR)) {
+  fs.mkdirSync(ENV_DIR, { recursive: true });
+}
+
+if (fs.existsSync(ENV_FILE)) {
+  const lines = fs.readFileSync(ENV_FILE, 'utf8').split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
