@@ -315,6 +315,10 @@ async function testProvider(url, key, fullModels = false) {
       }
       return result;
     }
+
+    // 200 成功
+    result.success = true;
+    return result;
   } catch (err) {
     result.latency = Date.now() - startTime;
     result.error = err.message;
