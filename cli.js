@@ -337,16 +337,23 @@ function getNextProviderNum() {
     content = fs.readFileSync(envPath, 'utf-8');
   }
 
-  let maxNum = 0;
+  // 找到所有已使用的编号
+  const usedNums = new Set();
   content.split('\n').forEach(line => {
     const match = line.match(/^UPSTREAM_(\d+)_URL=/);
     if (match) {
-      const num = parseInt(match[1], 10);
-      if (num > maxNum) maxNum = num;
+      usedNums.add(parseInt(match[1], 10));
     }
   });
 
-  return maxNum + 1;
+  // 找到第一个空缺的编号
+  for (let i = 1; i <= 50; i++) {
+    if (!usedNums.has(i)) {
+      return i;
+    }
+  }
+
+  return 1; // 默认返回1
 }
 
 /**
@@ -633,6 +640,17 @@ async function cmdProviderAdd() {
         console.log(`   模型数量: ${result.modelCount}`);
         if (result.models.length > 0) {
           console.log(`   模型示例: ${result.models.join(', ')}`);
+        }
+
+        // 如果模型数量为0，提示输入
+        if (result.modelCount === 0) {
+          console.log('');
+          console.log('⚠️  未能获取模型列表，请手动输入模型名称');
+          console.log('请输入该 Provider 支持的模型名称（逗号分隔，留空跳过）');
+          const inputModels = await question(rl, '例如: qwen-coder-plus,qwen-max,deepseek-r1', '');
+          if (inputModels.trim()) {
+            models = inputModels.split(',').map(m => m.trim()).filter(m => m);
+          }
         }
       }
 
